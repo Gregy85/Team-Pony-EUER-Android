@@ -1,0 +1,46 @@
+name: Build Team Pony APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Repository laden
+        uses: actions/checkout@v4
+
+      - name: Projekt entpacken
+        run: unzip -q Team_Pony_EUER_Android_APK_Builder.zip -d unpacked
+
+      - name: Java einrichten
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android einrichten
+        uses: android-actions/setup-android@v3
+
+      - name: Android SDK installieren
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Gradle einrichten
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: APK bauen
+        run: gradle -p unpacked/Team_Pony_EUER_Android assembleDebug
+
+      - name: APK umbenennen
+        run: cp unpacked/Team_Pony_EUER_Android/app/build/outputs/apk/debug/app-debug.apk Team-Pony-EUER.apk
+
+      - name: APK bereitstellen
+        uses: actions/upload-artifact@v4
+        with:
+          name: Team-Pony-EUER-APK
+          path: Team-Pony-EUER.apk
