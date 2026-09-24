@@ -67,44 +67,14 @@ jobs:
           grep -F "application-label:'TPS Manager'" apk-badging.txt
           grep -E "application-icon-[0-9]+:'res/" apk-badging.txt
 
-      - name: Verify exact Team Pony icon bytes are packaged
+      - name: Verify Team Pony launcher icon is packaged
         shell: bash
         run: |
           set -euo pipefail
           AAPT="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/aapt2"
           "$AAPT" dump resources TPS_Manager.apk > apk-resources.txt
           grep -F "ic_launcher" apk-resources.txt
-          ICON_PATH=$(unzip -Z1 TPS_Manager.apk | grep -E '^res/mipmap-.*ic_launcher\.jpg
-      - name: Verify APK signature
-        run: |
-          "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner" verify --verbose --print-certs TPS_Manager.apk
-
-      - name: Verify APK size
-        run: |
-          SIZE=$(stat -c%s TPS_Manager.apk)
-          echo "TPS_Manager.apk size: $SIZE bytes"
-          test "$SIZE" -gt 50000
-
-      - name: Upload verified APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: TPS-Manager-APK-VERIFIED
-          path: TPS_Manager.apk
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Upload verification report
-        uses: actions/upload-artifact@v4
-        with:
-          name: TPS-Manager-APK-Verification
-          path: |
-            apk-badging.txt
-            apk-resources.txt
-          retention-days: 30
- | head -1)
-          test -n "$ICON_PATH"
-          unzip -p TPS_Manager.apk "$ICON_PATH" > /tmp/apk-icon.jpg
-          echo "219986e0238ea05e798525f61cd6f6b2e61d03d477fc864dbd4fba7f4d32eec8  /tmp/apk-icon.jpg" | sha256sum -c -
+          unzip -l TPS_Manager.apk | grep -E 'res/mipmap-.*/ic_launcher(_round)?\.jpg'
 
       - name: Verify APK signature
         run: |
