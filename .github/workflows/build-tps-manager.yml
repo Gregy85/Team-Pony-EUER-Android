@@ -21,11 +21,13 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android build tools
-        run: sdkmanager "platform-tools" "build-tools;35.0.0"
+      - name: Locate preinstalled Android build tools
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/build-tools"
+          BUILD_TOOLS_VERSION=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          echo "BUILD_TOOLS_VERSION=$BUILD_TOOLS_VERSION" >> "$GITHUB_ENV"
+          echo "Using Android build tools $BUILD_TOOLS_VERSION"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -43,7 +45,7 @@ jobs:
 
       - name: Verify package label and launcher icon reference
         run: |
-          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt2"
+          AAPT="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/aapt2"
           "$AAPT" dump badging TPS_Manager.apk | tee apk-badging.txt
           grep -F "package: name='de.teampony.tpsmanager'" apk-badging.txt
           grep -F "application-label:'TPS Manager'" apk-badging.txt
@@ -51,14 +53,14 @@ jobs:
 
       - name: Verify Team Pony icon resources are packaged
         run: |
-          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt2"
+          AAPT="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/aapt2"
           "$AAPT" dump resources TPS_Manager.apk > apk-resources.txt
           grep -F "tps_manager_icon" apk-resources.txt
           grep -F "ic_launcher" apk-resources.txt
 
       - name: Verify APK signature
         run: |
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs TPS_Manager.apk
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner" verify --verbose --print-certs TPS_Manager.apk
 
       - name: Verify APK size
         run: |
