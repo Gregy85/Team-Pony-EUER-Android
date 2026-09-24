@@ -6,6 +6,7 @@ import android.content.*;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.graphics.Color;
 import android.provider.OpenableColumns;
 import android.util.Base64;
 import android.webkit.*;
