@@ -1,4 +1,5 @@
 name: Build TPS Manager APK
+# rebuild 2026-09-24
 
 on:
   workflow_dispatch:
