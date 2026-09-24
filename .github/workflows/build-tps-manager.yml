@@ -1,17 +1,19 @@
 name: Build TPS Manager APK
-# rebuild 2026-09-24
 
 on:
   workflow_dispatch:
   push:
-    branches: [main, tps-manager-build]
+    branches: [main]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout current main
         uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -21,13 +23,21 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
-      - name: Build installable debug APK
-        run: gradle :app:assembleDebug
-      - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk TPS_Manager.apk
-      - name: Upload APK
+      - name: Clean old build output
+        run: rm -rf app/build TPS_Manager.apk
+      - name: Build fresh installable debug APK
+        run: gradle --no-build-cache clean :app:assembleDebug
+      - name: Verify fresh APK and icon resource
+        run: |
+          test -f app/build/outputs/apk/debug/app-debug.apk
+          test -f app/src/main/res/drawable-nodpi/tps_manager_icon.png
+          ls -lh app/build/outputs/apk/debug/app-debug.apk app/src/main/res/drawable-nodpi/tps_manager_icon.png
+          cp app/build/outputs/apk/debug/app-debug.apk TPS_Manager.apk
+          test "$(stat -c%s TPS_Manager.apk)" -gt 30000
+      - name: Upload fresh APK
         uses: actions/upload-artifact@v4
         with:
           name: TPS-Manager-APK
           path: TPS_Manager.apk
           if-no-files-found: error
+          retention-days: 30
