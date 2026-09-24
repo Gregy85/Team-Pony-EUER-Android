@@ -19,10 +19,22 @@ public class MainActivity extends Activity {
     private Uri pendingPdf;
     private ValueCallback<Uri[]> fileChooserCallback;
     private static final int FILE_CHOOSER_REQUEST = 1201;
+    private float swipeDownX, swipeDownY;
 
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
         web = new WebView(this); setContentView(web);
+        web.setOnTouchListener((v,e)->{
+            if(e.getAction()==android.view.MotionEvent.ACTION_DOWN){ swipeDownX=e.getX(); swipeDownY=e.getY(); }
+            if(e.getAction()==android.view.MotionEvent.ACTION_UP){
+                float dx=e.getX()-swipeDownX, dy=Math.abs(e.getY()-swipeDownY);
+                if(swipeDownX < web.getWidth()*0.30f && dx > web.getWidth()*0.25f && dy < web.getHeight()*0.18f){
+                    web.evaluateJavascript("(function(){try{if(window.tpsCloseScanner){window.tpsCloseScanner();return 'closed'}const b=[...document.querySelectorAll('button,[role=button]')].find(x=>/zurück|schließen|abbrechen|close/i.test((x.innerText||x.getAttribute('aria-label')||'')));if(b){b.click();return 'closed'}return 'none'}catch(e){return 'err'}})();", value->{ if("\"none\"".equals(value)&&web.canGoBack()) web.goBack(); });
+                    return true;
+                }
+            }
+            return false;
+        });
         WebSettings s=web.getSettings(); s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true); s.setMediaPlaybackRequiresUserGesture(false);
         web.setWebChromeClient(new WebChromeClient(){
             @Override public void onPermissionRequest(PermissionRequest r){ runOnUiThread(() -> r.grant(r.getResources())); }
