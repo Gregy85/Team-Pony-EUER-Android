@@ -34,23 +34,24 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Use packaged Team Pony launcher icon
+      - name: Install real Team Pony launcher icon
         shell: bash
         run: |
           set -euo pipefail
-          # The Team Pony logo is already stored as real PNG resources in the repo.
-          # Remove Android 8+ adaptive-icon XML overrides so Android cannot fall
-          # back to the old foreground/generic icon.
+          ICON_URL="https://phenomenal-sfogliatella-09cbcb.netlify.app/assets/tps-manager-v73-192.png"
+          curl --fail --location --retry 3 "$ICON_URL" -o /tmp/teampony.png
+          file /tmp/teampony.png | grep -F "PNG image data"
+          test "$(stat -c%s /tmp/teampony.png)" -gt 10000
           rm -f app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
           rm -f app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
           rm -f app/src/main/res/drawable/ic_launcher.xml
           for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
-            test -s "app/src/main/res/mipmap-$d/ic_launcher.png"
-            cp "app/src/main/res/mipmap-$d/ic_launcher.png" "app/src/main/res/mipmap-$d/ic_launcher_round.png"
+            mkdir -p "app/src/main/res/mipmap-$d"
+            cp /tmp/teampony.png "app/src/main/res/mipmap-$d/ic_launcher.png"
+            cp /tmp/teampony.png "app/src/main/res/mipmap-$d/ic_launcher_round.png"
           done
           grep -q 'android:icon="@mipmap/ic_launcher"' app/src/main/AndroidManifest.xml
           grep -q 'android:roundIcon="@mipmap/ic_launcher_round"' app/src/main/AndroidManifest.xml
-          echo "Using repository Team Pony PNG launcher icons only."
 
       - name: Clean old build output
         run: rm -rf app/build TPS_Manager.apk
