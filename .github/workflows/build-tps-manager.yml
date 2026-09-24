@@ -76,7 +76,10 @@ jobs:
           AAPT="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/aapt2"
           "$AAPT" dump resources TPS_Manager.apk > apk-resources.txt
           grep -F "ic_launcher" apk-resources.txt
-          unzip -l TPS_Manager.apk | grep -E 'res/mipmap-.*/ic_launcher(_round)?\.jpg'
+          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            grep -F "res/mipmap-$d-v4/ic_launcher.png type=PNG" apk-resources.txt
+            grep -F "res/mipmap-$d-v4/ic_launcher_round.png type=PNG" apk-resources.txt
+          done
 
       - name: Verify APK signature
         run: |
