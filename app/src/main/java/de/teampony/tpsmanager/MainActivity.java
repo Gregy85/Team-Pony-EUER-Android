@@ -23,6 +23,10 @@ public class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
+        if (android.os.Build.VERSION.SDK_INT >= 30) getWindow().setDecorFitsSystemWindows(true);
+        getWindow().setStatusBarColor(Color.WHITE);
+        getWindow().setNavigationBarColor(Color.WHITE);
+        if (android.os.Build.VERSION.SDK_INT >= 23) getWindow().getDecorView().setSystemUiVisibility(android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
         web = new WebView(this); setContentView(web);
         if (android.os.Build.VERSION.SDK_INT >= 30) {
             web.setOnApplyWindowInsetsListener((v, insets) -> {
@@ -35,8 +39,10 @@ public class MainActivity extends Activity {
             if(e.getAction()==android.view.MotionEvent.ACTION_DOWN){ swipeDownX=e.getX(); swipeDownY=e.getY(); }
             if(e.getAction()==android.view.MotionEvent.ACTION_UP){
                 float dx=e.getX()-swipeDownX, dy=Math.abs(e.getY()-swipeDownY);
-                if(swipeDownX < web.getWidth()*0.30f && dx > web.getWidth()*0.25f && dy < web.getHeight()*0.18f){
-                    web.evaluateJavascript("(function(){try{if(window.tpsCloseScanner){window.tpsCloseScanner();return 'closed'}const b=[...document.querySelectorAll('button,[role=button]')].find(x=>/zurück|schließen|abbrechen|close/i.test((x.innerText||x.getAttribute('aria-label')||'')));if(b){b.click();return 'closed'}return 'none'}catch(e){return 'err'}})();", value->{ if("\"none\"".equals(value)&&web.canGoBack()) web.goBack(); });
+                boolean swipeRight = swipeDownX < web.getWidth()*0.30f && dx > web.getWidth()*0.25f;
+                boolean swipeLeft = swipeDownX > web.getWidth()*0.70f && dx < -web.getWidth()*0.25f;
+                if((swipeRight || swipeLeft) && dy < web.getHeight()*0.18f){
+                    web.evaluateJavascript("(function(){try{if(window.tpsCloseScanner){window.tpsCloseScanner();return 'closed'}const b=[...document.querySelectorAll('button,[role=button]')].find(x=>/zurück|schließen|abbrechen|close|kamera schließen/i.test((x.innerText||x.getAttribute('aria-label')||'')));if(b){b.click();return 'closed'}return 'none'}catch(e){return 'err'}})();", value->{ if("\"none\"".equals(value)&&web.canGoBack()) web.goBack(); });
                     return true;
                 }
             }
