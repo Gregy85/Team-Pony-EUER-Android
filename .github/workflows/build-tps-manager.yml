@@ -14,30 +14,71 @@ jobs:
         with:
           ref: main
           fetch-depth: 1
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
+        run: sdkmanager "platform-tools" "build-tools;35.0.0"
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
+
       - name: Clean old build output
         run: rm -rf app/build TPS_Manager.apk
-      - name: Build fresh installable debug APK
+
+      - name: Build fresh APK without build cache
         run: gradle --no-build-cache clean :app:assembleDebug
-      - name: Verify fresh APK and icon resource
+
+      - name: Copy freshly built APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk TPS_Manager.apk
+
+      - name: Verify package label and launcher icon reference
         run: |
-          test -f app/build/outputs/apk/debug/app-debug.apk
-          test -f app/src/main/res/drawable-nodpi/tps_manager_icon.png
-          ls -lh app/build/outputs/apk/debug/app-debug.apk app/src/main/res/drawable-nodpi/tps_manager_icon.png
-          cp app/build/outputs/apk/debug/app-debug.apk TPS_Manager.apk
-          test "$(stat -c%s TPS_Manager.apk)" -gt 30000
-      - name: Upload fresh APK
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt2"
+          "$AAPT" dump badging TPS_Manager.apk | tee apk-badging.txt
+          grep -F "package: name='de.teampony.tpsmanager'" apk-badging.txt
+          grep -F "application-label:'TPS Manager'" apk-badging.txt
+          grep -E "application-icon-[0-9]+:'res/" apk-badging.txt
+
+      - name: Verify Team Pony icon resources are packaged
+        run: |
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt2"
+          "$AAPT" dump resources TPS_Manager.apk > apk-resources.txt
+          grep -F "tps_manager_icon" apk-resources.txt
+          grep -F "ic_launcher" apk-resources.txt
+
+      - name: Verify APK signature
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs TPS_Manager.apk
+
+      - name: Verify APK size
+        run: |
+          SIZE=$(stat -c%s TPS_Manager.apk)
+          echo "TPS_Manager.apk size: $SIZE bytes"
+          test "$SIZE" -gt 50000
+
+      - name: Upload verified APK
         uses: actions/upload-artifact@v4
         with:
-          name: TPS-Manager-APK
+          name: TPS-Manager-APK-VERIFIED
           path: TPS_Manager.apk
           if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload verification report
+        uses: actions/upload-artifact@v4
+        with:
+          name: TPS-Manager-APK-Verification
+          path: |
+            apk-badging.txt
+            apk-resources.txt
           retention-days: 30
