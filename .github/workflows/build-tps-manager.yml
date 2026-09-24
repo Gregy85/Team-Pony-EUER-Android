@@ -34,6 +34,22 @@ jobs:
         with:
           gradle-version: '8.7'
 
+      - name: Install exact Team Pony launcher icon
+        shell: bash
+        run: |
+          set -euo pipefail
+          ICON_B64='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'
+          printf '%s' "$ICON_B64" | base64 -d > /tmp/teampony.jpg
+          echo "219986e0238ea05e798525f61cd6f6b2e61d03d477fc864dbd4fba7f4d32eec8  /tmp/teampony.jpg" | sha256sum -c -
+          rm -f app/src/main/res/mipmap-*/ic_launcher* app/src/main/res/drawable/ic_launcher.xml
+          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            mkdir -p "app/src/main/res/mipmap-$d"
+            cp /tmp/teampony.jpg "app/src/main/res/mipmap-$d/ic_launcher.jpg"
+            cp /tmp/teampony.jpg "app/src/main/res/mipmap-$d/ic_launcher_round.jpg"
+          done
+          grep -q 'android:icon="@mipmap/ic_launcher"' app/src/main/AndroidManifest.xml
+          grep -q 'android:roundIcon="@mipmap/ic_launcher_round"' app/src/main/AndroidManifest.xml
+
       - name: Clean old build output
         run: rm -rf app/build TPS_Manager.apk
 
@@ -51,12 +67,44 @@ jobs:
           grep -F "application-label:'TPS Manager'" apk-badging.txt
           grep -E "application-icon-[0-9]+:'res/" apk-badging.txt
 
-      - name: Verify Team Pony icon resources are packaged
+      - name: Verify exact Team Pony icon bytes are packaged
+        shell: bash
         run: |
+          set -euo pipefail
           AAPT="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/aapt2"
           "$AAPT" dump resources TPS_Manager.apk > apk-resources.txt
-          grep -F "tps_manager_icon" apk-resources.txt
           grep -F "ic_launcher" apk-resources.txt
+          ICON_PATH=$(unzip -Z1 TPS_Manager.apk | grep -E '^res/mipmap-.*ic_launcher\.jpg
+      - name: Verify APK signature
+        run: |
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner" verify --verbose --print-certs TPS_Manager.apk
+
+      - name: Verify APK size
+        run: |
+          SIZE=$(stat -c%s TPS_Manager.apk)
+          echo "TPS_Manager.apk size: $SIZE bytes"
+          test "$SIZE" -gt 50000
+
+      - name: Upload verified APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TPS-Manager-APK-VERIFIED
+          path: TPS_Manager.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload verification report
+        uses: actions/upload-artifact@v4
+        with:
+          name: TPS-Manager-APK-Verification
+          path: |
+            apk-badging.txt
+            apk-resources.txt
+          retention-days: 30
+ | head -1)
+          test -n "$ICON_PATH"
+          unzip -p TPS_Manager.apk "$ICON_PATH" > /tmp/apk-icon.jpg
+          echo "219986e0238ea05e798525f61cd6f6b2e61d03d477fc864dbd4fba7f4d32eec8  /tmp/apk-icon.jpg" | sha256sum -c -
 
       - name: Verify APK signature
         run: |
