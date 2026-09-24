@@ -24,6 +24,13 @@ public class MainActivity extends Activity {
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
         web = new WebView(this); setContentView(web);
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            web.setOnApplyWindowInsetsListener((v, insets) -> {
+                android.graphics.Insets bars = insets.getInsets(android.view.WindowInsets.Type.systemBars());
+                v.setPadding(0, bars.top, 0, bars.bottom);
+                return insets;
+            });
+        }
         web.setOnTouchListener((v,e)->{
             if(e.getAction()==android.view.MotionEvent.ACTION_DOWN){ swipeDownX=e.getX(); swipeDownY=e.getY(); }
             if(e.getAction()==android.view.MotionEvent.ACTION_UP){
