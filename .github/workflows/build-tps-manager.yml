@@ -3,7 +3,7 @@ name: Build TPS Manager APK
 on:
   workflow_dispatch:
   push:
-    branches: [tps-manager-build]
+    branches: [main, tps-manager-build]
 
 jobs:
   build:
