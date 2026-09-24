@@ -8,7 +8,7 @@ android {
         applicationId 'de.teampony.tpsmanager'
         minSdk 26
         targetSdk 35
-        versionCode 74102
-        versionName '74.1.2'
+        versionCode 75000
+        versionName '75.0.0'
     }
 }
