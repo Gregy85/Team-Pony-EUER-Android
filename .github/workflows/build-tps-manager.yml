@@ -53,14 +53,35 @@ jobs:
           grep -q 'android:icon="@mipmap/ic_launcher"' app/src/main/AndroidManifest.xml
           grep -q 'android:roundIcon="@mipmap/ic_launcher_round"' app/src/main/AndroidManifest.xml
 
+      - name: Restore persistent TPS signing key
+        shell: bash
+        env:
+          TPS_KEYSTORE_B64: ${{ secrets.TPS_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TPS_KEYSTORE_B64:-}" ]; then
+            echo "::error::Missing TPS_KEYSTORE_B64 repository secret. A persistent signing key is required so Android updates work."
+            exit 1
+          fi
+          printf '%s' "$TPS_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/tps-manager.jks"
+
       - name: Clean old build output
-        run: rm -rf app/build TPS_Manager.apk
+        run: rm -rf app/build TPS_Manager-unsigned.apk TPS_Manager.apk
 
       - name: Build fresh APK without build cache
         run: gradle --no-build-cache clean :app:assembleDebug
 
-      - name: Copy freshly built APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk TPS_Manager.apk
+      - name: Sign APK with persistent TPS key
+        shell: bash
+        env:
+          TPS_KEY_ALIAS: ${{ secrets.TPS_KEY_ALIAS }}
+          TPS_KEYSTORE_PASSWORD: ${{ secrets.TPS_KEYSTORE_PASSWORD }}
+          TPS_KEY_PASSWORD: ${{ secrets.TPS_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cp app/build/outputs/apk/debug/app-debug.apk TPS_Manager-unsigned.apk
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/zipalign" -f -p 4 TPS_Manager-unsigned.apk TPS_Manager-aligned.apk
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner" sign             --ks "$RUNNER_TEMP/tps-manager.jks"             --ks-key-alias "$TPS_KEY_ALIAS"             --ks-pass "pass:$TPS_KEYSTORE_PASSWORD"             --key-pass "pass:$TPS_KEY_PASSWORD"             --out TPS_Manager.apk TPS_Manager-aligned.apk
 
       - name: Verify package label and launcher icon reference
         run: |
