@@ -28,13 +28,6 @@ public class MainActivity extends Activity {
         getWindow().setNavigationBarColor(Color.WHITE);
         if (android.os.Build.VERSION.SDK_INT >= 23) getWindow().getDecorView().setSystemUiVisibility(android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
         web = new WebView(this); setContentView(web);
-        if (android.os.Build.VERSION.SDK_INT >= 30) {
-            web.setOnApplyWindowInsetsListener((v, insets) -> {
-                android.graphics.Insets bars = insets.getInsets(android.view.WindowInsets.Type.systemBars());
-                v.setPadding(0, bars.top, 0, bars.bottom);
-                return insets;
-            });
-        }
         web.setOnTouchListener((v,e)->{
             if(e.getAction()==android.view.MotionEvent.ACTION_DOWN){ swipeDownX=e.getX(); swipeDownY=e.getY(); }
             if(e.getAction()==android.view.MotionEvent.ACTION_UP){
@@ -66,7 +59,20 @@ public class MainActivity extends Activity {
                 catch(Exception e){ fileChooserCallback=null; Toast.makeText(MainActivity.this,"Dateiauswahl konnte nicht geöffnet werden.",Toast.LENGTH_LONG).show(); return false; }
             }
         });
-        web.setWebViewClient(new WebViewClient(){ @Override public void onPageFinished(WebView v,String u){ deliverPdf(); }});
+        web.setWebViewClient(new WebViewClient(){ @Override public void onPageFinished(WebView v,String u){
+            deliverPdf();
+            // Android 15+ keeps the WebView itself inside the system bars. Also expose
+            // native inset values to the web app for fixed headers/scanner overlays.
+            if (android.os.Build.VERSION.SDK_INT >= 23) {
+                android.graphics.Rect r=new android.graphics.Rect();
+                getWindow().getDecorView().getWindowVisibleDisplayFrame(r);
+                float d=getResources().getDisplayMetrics().density;
+                int top=Math.max(0,Math.round(r.top/d));
+                int bottom=Math.max(0,Math.round((getResources().getDisplayMetrics().heightPixels-r.bottom)/d));
+                String js="(function(){try{document.documentElement.style.setProperty('--tps-native-safe-top','"+top+"px');document.documentElement.style.setProperty('--tps-native-safe-bottom','"+bottom+"px');let s=document.getElementById('tps-android-safearea');if(!s){s=document.createElement('style');s.id='tps-android-safearea';s.textContent=':root{--tps-safe-top:max(env(safe-area-inset-top,0px),var(--tps-native-safe-top,0px));--tps-safe-bottom:max(env(safe-area-inset-bottom,0px),var(--tps-native-safe-bottom,0px))}';document.head.appendChild(s)}}catch(e){}})();";
+                v.evaluateJavascript(js,null);
+            }
+        }});
         if (checkSelfPermission(Manifest.permission.CAMERA)!=PackageManager.PERMISSION_GRANTED) requestPermissions(new String[]{Manifest.permission.CAMERA},10);
         acceptIntent(getIntent());
         web.loadUrl(APP_URL);
