@@ -117,5 +117,15 @@ public class MainActivity extends Activity {
         }
     }
 
-    @Override public void onBackPressed(){ if(web.canGoBack())web.goBack(); else super.onBackPressed(); }
+    private void nativeBackFallback(){
+        if(web.canGoBack()) web.goBack();
+        else super.onBackPressed();
+    }
+
+    @Override public void onBackPressed(){
+        if(web==null){ super.onBackPressed(); return; }
+        web.evaluateJavascript("(function(){try{return (window.teamPonyHandleAndroidBack&&window.teamPonyHandleAndroidBack())?'handled':'none'}catch(e){return 'none'}})();", value -> {
+            if(!"\"handled\"".equals(value)) nativeBackFallback();
+        });
+    }
 }
