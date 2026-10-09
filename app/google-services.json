@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "117369501641",
+    "project_id": "team-pony-manager",
+    "storage_bucket": "team-pony-manager.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:117369501641:android:fc0867af95e403b73c1a18",
+        "android_client_info": {
+          "package_name": "de.teampony.tpsmanager"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCeKb5eZEWmzjbzlzasxO6JgujPzWR6cUs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
