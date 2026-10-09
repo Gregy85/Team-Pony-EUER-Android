@@ -14,6 +14,7 @@ import android.graphics.Color;
 import android.provider.OpenableColumns;
 import android.util.Base64;
 import android.webkit.*;
+import com.google.firebase.messaging.FirebaseMessaging;
 import androidx.work.ExistingPeriodicWorkPolicy;
 import androidx.work.PeriodicWorkRequest;
 import androidx.work.WorkManager;
@@ -37,6 +38,9 @@ public class MainActivity extends Activity {
         if (android.os.Build.VERSION.SDK_INT >= 23) getWindow().getDecorView().setSystemUiVisibility(android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
         web = new WebView(this); setContentView(web);
         createNotificationChannel();
+        FirebaseMessaging.getInstance().getToken().addOnCompleteListener(task -> {
+            if(task.isSuccessful()) FCMRegistration.saveAndRegister(MainActivity.this, task.getResult());
+        });
         web.addJavascriptInterface(new AndroidBridge(), "AndroidTPS");
         web.setOnTouchListener((v,e)->{
             if(e.getAction()==android.view.MotionEvent.ACTION_DOWN){ swipeDownX=e.getX(); swipeDownY=e.getY(); }
@@ -135,6 +139,7 @@ public class MainActivity extends Activity {
                     .putString("user_id",o.optString("user_id",""))
                     .apply();
                 scheduleNotificationWorker();
+                FCMRegistration.registerSaved(MainActivity.this);
             }catch(Exception ignored){}
         }
     }
