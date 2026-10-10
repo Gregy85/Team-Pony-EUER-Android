@@ -58,9 +58,11 @@ public class NotificationWorker extends Worker {
         if(count<=0){nm.cancel(4201);return;}
         Intent launch=new Intent(ctx,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent pi=PendingIntent.getActivity(ctx,4201,launch,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-        String text=count==1?rows.optJSONObject(0).optString("title","1 neuer Hinweis"):count+" neue Hinweise";
+        JSONObject latest=rows.optJSONObject(0);
+        String title=count==1?(latest==null?"Neue Homepage-Anfrage":latest.optString("title","Neue Homepage-Anfrage")):count+" neue Homepage-Anfragen";
+        String text=latest==null?"":latest.optString("body","");
         Notification.Builder nb=Build.VERSION.SDK_INT>=26?new Notification.Builder(ctx,"tps_booking_updates"):new Notification.Builder(ctx);
-        nb.setContentTitle("TPS Manager").setContentText(text).setSmallIcon(R.mipmap.ic_launcher).setContentIntent(pi).setAutoCancel(false).setOnlyAlertOnce(true).setNumber(count);
+        nb.setContentTitle(title).setContentText(text).setSmallIcon(R.mipmap.ic_launcher).setContentIntent(pi).setAutoCancel(false).setOnlyAlertOnce(true).setNumber(count);
         nm.notify(4201,nb.build());
     }
 
