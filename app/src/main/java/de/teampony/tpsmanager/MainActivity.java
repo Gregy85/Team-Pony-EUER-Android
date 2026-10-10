@@ -114,7 +114,7 @@ public class MainActivity extends Activity {
             ? new android.app.Notification.Builder(this,"tps_booking_updates")
             : new android.app.Notification.Builder(this);
         nb.setContentTitle("TPS Manager")
-          .setContentText(count==1?"1 neuer Hinweis":count+" neue Hinweise")
+          .setContentText(count==1?"Neue Homepage-Anfrage":count+" neue Homepage-Anfragen")
           .setSmallIcon(R.mipmap.ic_launcher)
           .setContentIntent(pi)
           .setAutoCancel(false)
