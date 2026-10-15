@@ -1,35 +1,30 @@
-name: Legacy Team Pony APK (manual only)
+name: Build TPS Manager APK
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Repository laden
-        uses: actions/checkout@v4
-      - name: Projekt entpacken
-        run: unzip -q Team_Pony_EUER_Android_APK_Builder.zip -d unpacked
-      - name: Java einrichten
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
-      - name: Android einrichten
-        uses: android-actions/setup-android@v3
-      - name: Android SDK installieren
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-      - name: Gradle einrichten
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.7"
-      - name: APK bauen
-        run: gradle -p unpacked/Team_Pony_EUER_Android assembleDebug
-      - name: APK umbenennen
-        run: cp unpacked/Team_Pony_EUER_Android/app/build/outputs/apk/debug/app-debug.apk Team-Pony-EUER.apk
-      - name: APK bereitstellen
-        uses: actions/upload-artifact@v4
+      - name: Build APK from current source
+        run: gradle assembleDebug
+      - name: Name APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk TPS-Manager-Android-98.1.0.apk
+      - uses: actions/upload-artifact@v4
         with:
-          name: Team-Pony-EUER-APK
-          path: Team-Pony-EUER.apk
+          name: TPS-Manager-Android-98.1.0
+          path: TPS-Manager-Android-98.1.0.apk
