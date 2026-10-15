@@ -34,16 +34,22 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Use verified Team Pony launcher icon from repository
+      - name: Install exact known-good Team Pony launcher icon
         shell: bash
         run: |
           set -euo pipefail
+          ICON_URL="https://phenomenal-sfogliatella-09cbcb.netlify.app/assets/tps-manager-v73-192.png"
+          ICON_SHA256="db851101295694d229525705c69ed43e2e2d7144c4f5fc8d6e6867a0c0270472"
+          curl --fail --location --retry 3 "$ICON_URL" -o /tmp/teampony.png
+          file /tmp/teampony.png | grep -F "PNG image data"
+          echo "$ICON_SHA256  /tmp/teampony.png" | sha256sum -c -
           rm -f app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
           rm -f app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
           rm -f app/src/main/res/drawable/ic_launcher.xml
           for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
-            test -s "app/src/main/res/mipmap-$d/ic_launcher.png"
-            cp "app/src/main/res/mipmap-$d/ic_launcher.png" "app/src/main/res/mipmap-$d/ic_launcher_round.png"
+            mkdir -p "app/src/main/res/mipmap-$d"
+            cp /tmp/teampony.png "app/src/main/res/mipmap-$d/ic_launcher.png"
+            cp /tmp/teampony.png "app/src/main/res/mipmap-$d/ic_launcher_round.png"
           done
           test -s app/src/main/res/drawable/tps_launcher_9812.xml
           grep -q 'android:src="@mipmap/ic_launcher"' app/src/main/res/drawable/tps_launcher_9812.xml
