@@ -129,7 +129,17 @@ public class MainActivity extends Activity {
     }
 
     public class AndroidBridge {
-        @JavascriptInterface public void setBadgeCount(int count){ runOnUiThread(()->updateBadgeNotification(count)); }\n        @JavascriptInterface public String getAppVersion(){\n            try { return getPackageManager().getPackageInfo(getPackageName(),0).versionName; }\n            catch(Exception e){ return "unbekannt"; }\n        }\n        @JavascriptInterface public long getAppVersionCode(){\n            try {\n                android.content.pm.PackageInfo p=getPackageManager().getPackageInfo(getPackageName(),0);\n                return Build.VERSION.SDK_INT>=28 ? p.getLongVersionCode() : p.versionCode;\n            } catch(Exception e){ return -1; }\n        }
+        @JavascriptInterface public void setBadgeCount(int count){ runOnUiThread(()->updateBadgeNotification(count)); }
+        @JavascriptInterface public String getAppVersion(){
+            try { return getPackageManager().getPackageInfo(getPackageName(),0).versionName; }
+            catch(Exception e){ return "unbekannt"; }
+        }
+        @JavascriptInterface public long getAppVersionCode(){
+            try {
+                android.content.pm.PackageInfo p=getPackageManager().getPackageInfo(getPackageName(),0);
+                return Build.VERSION.SDK_INT>=28 ? p.getLongVersionCode() : p.versionCode;
+            } catch(Exception e){ return -1; }
+        }
         @JavascriptInterface public void syncSession(String json){
             try{
                 org.json.JSONObject o=new org.json.JSONObject(json);
