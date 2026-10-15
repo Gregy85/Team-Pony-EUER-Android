@@ -34,21 +34,16 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Install real Team Pony launcher icon
+      - name: Use verified Team Pony launcher icon from repository
         shell: bash
         run: |
           set -euo pipefail
-          ICON_URL="https://phenomenal-sfogliatella-09cbcb.netlify.app/assets/tps-manager-v73-192.png"
-          curl --fail --location --retry 3 "$ICON_URL" -o /tmp/teampony.png
-          file /tmp/teampony.png | grep -F "PNG image data"
-          test "$(stat -c%s /tmp/teampony.png)" -gt 10000
           rm -f app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
           rm -f app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
           rm -f app/src/main/res/drawable/ic_launcher.xml
           for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
-            mkdir -p "app/src/main/res/mipmap-$d"
-            cp /tmp/teampony.png "app/src/main/res/mipmap-$d/ic_launcher.png"
-            cp /tmp/teampony.png "app/src/main/res/mipmap-$d/ic_launcher_round.png"
+            test -s "app/src/main/res/mipmap-$d/ic_launcher.png"
+            cp "app/src/main/res/mipmap-$d/ic_launcher.png" "app/src/main/res/mipmap-$d/ic_launcher_round.png"
           done
           grep -q 'android:icon="@mipmap/ic_launcher"' app/src/main/AndroidManifest.xml
           grep -q 'android:roundIcon="@mipmap/ic_launcher_round"' app/src/main/AndroidManifest.xml
@@ -103,9 +98,12 @@ jobs:
             grep -F "res/mipmap-$d-v4/ic_launcher_round.png type=PNG" apk-resources.txt
           done
 
-      - name: Verify APK signature
+      - name: Verify exact persistent APK signature
+        shell: bash
         run: |
-          "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner" verify --verbose --print-certs TPS_Manager.apk
+          set -euo pipefail
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner" verify --verbose --print-certs TPS_Manager.apk | tee apk-signature.txt
+          grep -F "certificate SHA-256 digest: b2af1d9febc11381892740b21e2f466ca9236e983a715873e43c3f804d35b742" apk-signature.txt
 
       - name: Verify APK size
         run: |
@@ -116,7 +114,7 @@ jobs:
       - name: Upload verified APK
         uses: actions/upload-artifact@v4
         with:
-          name: TPS-Manager-APK-VERIFIED
+          name: TPS-Manager-Android-98.1.1-VERIFIED
           path: TPS_Manager.apk
           if-no-files-found: error
           retention-days: 30
@@ -128,4 +126,5 @@ jobs:
           path: |
             apk-badging.txt
             apk-resources.txt
+            apk-signature.txt
           retention-days: 30
