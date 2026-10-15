@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Workflow compatibility marker: android:src="@mipmap/ic_launcher" -->
 <bitmap xmlns:android="http://schemas.android.com/apk/res/android"
-    android:src="@mipmap/ic_launcher"
+    android:src="@drawable/tps_manager_icon"
     android:gravity="fill"
     android:antialias="true"
     android:filter="true" />
