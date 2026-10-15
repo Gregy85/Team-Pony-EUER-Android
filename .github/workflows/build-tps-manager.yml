@@ -45,8 +45,10 @@ jobs:
             test -s "app/src/main/res/mipmap-$d/ic_launcher.png"
             cp "app/src/main/res/mipmap-$d/ic_launcher.png" "app/src/main/res/mipmap-$d/ic_launcher_round.png"
           done
-          grep -q 'android:icon="@mipmap/ic_launcher"' app/src/main/AndroidManifest.xml
-          grep -q 'android:roundIcon="@mipmap/ic_launcher_round"' app/src/main/AndroidManifest.xml
+          test -s app/src/main/res/drawable/tps_launcher_9812.xml
+          grep -q 'android:src="@mipmap/ic_launcher"' app/src/main/res/drawable/tps_launcher_9812.xml
+          grep -q 'android:icon="@drawable/tps_launcher_9812"' app/src/main/AndroidManifest.xml
+          grep -q 'android:roundIcon="@drawable/tps_launcher_9812"' app/src/main/AndroidManifest.xml
 
       - name: Restore persistent TPS signing key
         shell: bash
@@ -92,10 +94,10 @@ jobs:
           set -euo pipefail
           AAPT="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/aapt2"
           "$AAPT" dump resources TPS_Manager.apk > apk-resources.txt
+          grep -F "tps_launcher_9812" apk-resources.txt
           grep -F "ic_launcher" apk-resources.txt
           for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
             grep -F "res/mipmap-$d-v4/ic_launcher.png type=PNG" apk-resources.txt
-            grep -F "res/mipmap-$d-v4/ic_launcher_round.png type=PNG" apk-resources.txt
           done
 
       - name: Verify exact persistent APK signature
@@ -114,7 +116,7 @@ jobs:
       - name: Upload verified APK
         uses: actions/upload-artifact@v4
         with:
-          name: TPS-Manager-Android-98.1.1-VERIFIED
+          name: TPS-Manager-Android-98.1.2-VERIFIED
           path: TPS_Manager.apk
           if-no-files-found: error
           retention-days: 30
