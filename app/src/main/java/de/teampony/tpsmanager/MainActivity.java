@@ -195,6 +195,19 @@ public class MainActivity extends Activity {
                 return Build.VERSION.SDK_INT>=28 ? p.getLongVersionCode() : p.versionCode;
             } catch(Exception e){ return -1; }
         }
+        @JavascriptInterface public synchronized String getPendingDocxName(){ return pendingDocxName==null?"":pendingDocxName; }
+        @JavascriptInterface public synchronized int getPendingDocxChunkCount(){
+            if(pendingDocxXmlB64==null||pendingDocxXmlB64.isEmpty())return 0;
+            return (pendingDocxXmlB64.length()+DOCX_CHUNK_SIZE-1)/DOCX_CHUNK_SIZE;
+        }
+        @JavascriptInterface public synchronized String getPendingDocxChunk(int index){
+            if(pendingDocxXmlB64==null||index<0)return "";
+            int start=index*DOCX_CHUNK_SIZE;
+            if(start>=pendingDocxXmlB64.length())return "";
+            int end=Math.min(start+DOCX_CHUNK_SIZE,pendingDocxXmlB64.length());
+            return pendingDocxXmlB64.substring(start,end);
+        }
+        @JavascriptInterface public synchronized void clearPendingDocx(){ pendingDocxXmlB64=null; pendingDocxName=null; }
         @JavascriptInterface public void saveBase64File(String fileName,String mimeType,String base64Data){
             runOnUiThread(() -> {
                 try{
