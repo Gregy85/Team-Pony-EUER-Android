@@ -257,6 +257,33 @@ public class MainActivity extends Activity {
         return n==null?"Beleg.pdf":n;
     }
 
+    private boolean prepareDocxForWeb(Uri u){
+        if(u==null)return false;
+        String name=displayName(u);
+        try(InputStream raw=getContentResolver().openInputStream(u)){
+            if(raw==null)throw new IOException("Datei konnte nicht geöffnet werden");
+            byte[] xmlBytes=null;
+            try(ZipInputStream zin=new ZipInputStream(new BufferedInputStream(raw))){
+                ZipEntry entry;
+                while((entry=zin.getNextEntry())!=null){
+                    if("word/document.xml".equals(entry.getName())){
+                        ByteArrayOutputStream out=new ByteArrayOutputStream();
+                        byte[] buf=new byte[8192]; int n;
+                        while((n=zin.read(buf))>0){ out.write(buf,0,n); if(out.size()>8*1024*1024)throw new IOException("Word-Dokumentinhalt ist zu groß"); }
+                        xmlBytes=out.toByteArray(); break;
+                    }
+                }
+            }
+            if(xmlBytes==null||xmlBytes.length==0)throw new IOException("Word-Inhalt wurde nicht gefunden");
+            synchronized(this){ pendingDocxXmlB64=Base64.encodeToString(xmlBytes,Base64.NO_WRAP); pendingDocxName=(name==null||name.trim().isEmpty())?"Workshop-Vorlage.docx":name; }
+            if(web!=null)web.evaluateJavascript("window.dispatchEvent(new CustomEvent('tps-android-docx-ready'));",null);
+            return true;
+        }catch(Exception e){
+            synchronized(this){ pendingDocxXmlB64=null; pendingDocxName=null; }
+            Toast.makeText(this,"Word-Datei konnte nicht geöffnet werden: "+e.getMessage(),Toast.LENGTH_LONG).show();
+            return false;
+        }
+    }
     private void deliverPdf(){
         if(pendingPdf==null || web.getProgress()<80)return;
         Uri u=pendingPdf; pendingPdf=null;
