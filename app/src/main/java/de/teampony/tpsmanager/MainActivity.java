@@ -12,6 +12,7 @@ import android.os.Bundle;
 import android.os.Build;
 import android.graphics.Color;
 import android.provider.OpenableColumns;
+import android.provider.DocumentsContract;
 import android.util.Base64;
 import android.webkit.*;
 import com.google.firebase.messaging.FirebaseMessaging;
@@ -27,6 +28,7 @@ public class MainActivity extends Activity {
     private WebView web;
     private Uri pendingPdf;
     private ValueCallback<Uri[]> fileChooserCallback;
+    private boolean fileChooserIsDocx=false;
     private static final int FILE_CHOOSER_REQUEST = 1201;
     private static final int SAVE_DOCUMENT_REQUEST = 1202;
     private byte[] pendingSaveBytes;
@@ -64,6 +66,7 @@ public class MainActivity extends Activity {
             @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params){
                 if(fileChooserCallback!=null) fileChooserCallback.onReceiveValue(null);
                 fileChooserCallback=callback;
+                fileChooserIsDocx=isDocxChooser(params);
                 Intent intent;
                 try { intent=params.createIntent(); }
                 catch(Exception e){
@@ -72,8 +75,10 @@ public class MainActivity extends Activity {
                     intent.setType("*/*");
                     intent.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"image/*","application/pdf","application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
                 }
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                if(fileChooserIsDocx) applyLastNasLocation(intent);
                 try { startActivityForResult(intent,FILE_CHOOSER_REQUEST); return true; }
-                catch(Exception e){ fileChooserCallback=null; Toast.makeText(MainActivity.this,"Dateiauswahl konnte nicht geöffnet werden.",Toast.LENGTH_LONG).show(); return false; }
+                catch(Exception e){ fileChooserCallback=null; fileChooserIsDocx=false; Toast.makeText(MainActivity.this,"Dateiauswahl konnte nicht geöffnet werden.",Toast.LENGTH_LONG).show(); return false; }
             }
         });
         web.setWebViewClient(new WebViewClient(){ @Override public void onPageFinished(WebView v,String u){
@@ -98,6 +103,48 @@ public class MainActivity extends Activity {
         web.loadUrl(APP_URL);
     }
 
+
+    private boolean isDocxChooser(WebChromeClient.FileChooserParams params){
+        try{
+            String[] types=params==null?null:params.getAcceptTypes();
+            if(types!=null)for(String t:types){
+                String s=String.valueOf(t).toLowerCase();
+                if(s.contains("wordprocessingml")||s.contains(".docx")||s.contains("msword")) return true;
+            }
+        }catch(Exception ignored){}
+        return false;
+    }
+
+    private void applyLastNasLocation(Intent intent){
+        if(Build.VERSION.SDK_INT<26 || intent==null)return;
+        try{
+            String saved=getSharedPreferences("tps_native",MODE_PRIVATE).getString("last_docx_location_uri","");
+            if(saved!=null&&!saved.isEmpty()) intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI,Uri.parse(saved));
+        }catch(Exception ignored){}
+    }
+
+    private void rememberNasLocation(Uri uri,int flags){
+        if(uri==null)return;
+        try{
+            int takeFlags=flags&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            if(takeFlags!=0)getContentResolver().takePersistableUriPermission(uri,takeFlags);
+        }catch(Exception ignored){}
+        Uri location=uri;
+        try{
+            if(Build.VERSION.SDK_INT>=19 && DocumentsContract.isDocumentUri(this,uri)){
+                String id=DocumentsContract.getDocumentId(uri);
+                int slash=id==null?-1:id.lastIndexOf('/');
+                if(slash>0){
+                    String parent=id.substring(0,slash);
+                    Uri p=DocumentsContract.buildDocumentUri(uri.getAuthority(),parent);
+                    if(p!=null)location=p;
+                }
+            }
+        }catch(Exception ignored){}
+        try{
+            getSharedPreferences("tps_native",MODE_PRIVATE).edit().putString("last_docx_location_uri",location.toString()).apply();
+        }catch(Exception ignored){}
+    }
 
     private void createNotificationChannel(){
         if(Build.VERSION.SDK_INT>=26){
@@ -154,6 +201,7 @@ public class MainActivity extends Activity {
                     intent.addCategory(Intent.CATEGORY_OPENABLE);
                     intent.setType((mimeType==null||mimeType.trim().isEmpty())?"application/octet-stream":mimeType);
                     intent.putExtra(Intent.EXTRA_TITLE,pendingSaveName);
+                    applyLastNasLocation(intent);
                     startActivityForResult(intent,SAVE_DOCUMENT_REQUEST);
                 }catch(Exception e){
                     pendingSaveBytes=null;
@@ -212,6 +260,7 @@ public class MainActivity extends Activity {
                     if(out==null)throw new IOException("Speicherziel konnte nicht geöffnet werden");
                     out.write(pendingSaveBytes);
                     out.flush();
+                    rememberNasLocation(data.getData(),data.getFlags());
                     ok=true;
                     Toast.makeText(this,"Word-Vorlage gespeichert",Toast.LENGTH_SHORT).show();
                 }catch(Exception e){
@@ -229,9 +278,14 @@ public class MainActivity extends Activity {
             if(resultCode==RESULT_OK){
                 result=WebChromeClient.FileChooserParams.parseResult(resultCode,data);
                 if(result==null && data!=null && data.getData()!=null) result=new Uri[]{data.getData()};
+                if(fileChooserIsDocx){
+                    Uri selected=(data!=null&&data.getData()!=null)?data.getData():(result!=null&&result.length>0?result[0]:null);
+                    if(selected!=null) rememberNasLocation(selected,data==null?Intent.FLAG_GRANT_READ_URI_PERMISSION:data.getFlags());
+                }
             }
             fileChooserCallback.onReceiveValue(result);
             fileChooserCallback=null;
+            fileChooserIsDocx=false;
         }
     }
 
