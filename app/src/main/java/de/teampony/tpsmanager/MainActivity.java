@@ -22,6 +22,8 @@ import androidx.work.WorkManager;
 import java.util.concurrent.TimeUnit;
 import android.widget.Toast;
 import java.io.*;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 public class MainActivity extends Activity {
     private static final String APP_URL = "https://phenomenal-sfogliatella-09cbcb.netlify.app/";
@@ -33,6 +35,9 @@ public class MainActivity extends Activity {
     private static final int SAVE_DOCUMENT_REQUEST = 1202;
     private byte[] pendingSaveBytes;
     private String pendingSaveName;
+    private String pendingDocxXmlB64;
+    private String pendingDocxName;
+    private static final int DOCX_CHUNK_SIZE=48000;
     private float swipeDownX, swipeDownY;
 
     @Override public void onCreate(Bundle b) {
