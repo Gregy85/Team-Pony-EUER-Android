@@ -11,8 +11,8 @@ android {
         applicationId 'de.teampony.tpsmanager'
         minSdk 26
         targetSdk 35
-        versionCode 98008
-        versionName '98.1.7'
+        versionCode 98009
+        versionName '98.1.8'
     }
 }
 
@@ -20,5 +20,4 @@ dependencies {
     implementation 'androidx.work:work-runtime:2.9.1'
     implementation platform('com.google.firebase:firebase-bom:33.7.0')
     implementation 'com.google.firebase:firebase-messaging'
-    implementation 'org.apache.poi:poi-scratchpad:5.2.5'
 }
