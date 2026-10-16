@@ -31,6 +31,7 @@ public class MainActivity extends Activity {
     private boolean fileChooserIsDocx=false;
     private static final int FILE_CHOOSER_REQUEST = 1201;
     private static final int SAVE_DOCUMENT_REQUEST = 1202;
+    private static final int NAS_FOLDER_REQUEST = 1203;
     private byte[] pendingSaveBytes;
     private String pendingSaveName;
     private String pendingDocxXmlB64;
@@ -74,15 +75,22 @@ public class MainActivity extends Activity {
                 fileChooserCallback=callback;
                 fileChooserIsDocx=isDocxChooser(params);
                 Intent intent;
-                try { intent=params.createIntent(); }
-                catch(Exception e){
+                if(fileChooserIsDocx){
                     intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
                     intent.addCategory(Intent.CATEGORY_OPENABLE);
                     intent.setType("*/*");
-                    intent.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"image/*","application/pdf","application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
+                    intent.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"application/msword","application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
+                    applyLastNasLocation(intent);
+                }else{
+                    try { intent=params.createIntent(); }
+                    catch(Exception e){
+                        intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                        intent.addCategory(Intent.CATEGORY_OPENABLE);
+                        intent.setType("*/*");
+                        intent.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"image/*","application/pdf"});
+                    }
                 }
                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-                if(fileChooserIsDocx) applyLastNasLocation(intent);
                 try { startActivityForResult(intent,FILE_CHOOSER_REQUEST); return true; }
                 catch(Exception e){ fileChooserCallback=null; fileChooserIsDocx=false; Toast.makeText(MainActivity.this,"Dateiauswahl konnte nicht geöffnet werden.",Toast.LENGTH_LONG).show(); return false; }
             }
@@ -124,7 +132,9 @@ public class MainActivity extends Activity {
     private void applyLastNasLocation(Intent intent){
         if(Build.VERSION.SDK_INT<26 || intent==null)return;
         try{
-            String saved=getSharedPreferences("tps_native",MODE_PRIVATE).getString("last_docx_location_uri","");
+            android.content.SharedPreferences p=getSharedPreferences("tps_native",MODE_PRIVATE);
+            String saved=p.getString("preferred_nas_folder_uri","");
+            if(saved==null||saved.isEmpty()) saved=p.getString("last_docx_location_uri","");
             if(saved!=null&&!saved.isEmpty()) intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI,Uri.parse(saved));
         }catch(Exception ignored){}
     }
@@ -150,6 +160,28 @@ public class MainActivity extends Activity {
         try{
             getSharedPreferences("tps_native",MODE_PRIVATE).edit().putString("last_docx_location_uri",location.toString()).apply();
         }catch(Exception ignored){}
+    }
+
+    private String nasFolderDisplayName(Uri uri){
+        if(uri==null)return "Ponyschule";
+        try(android.database.Cursor c=getContentResolver().query(uri,new String[]{OpenableColumns.DISPLAY_NAME},null,null,null)){
+            if(c!=null&&c.moveToFirst()){
+                int x=c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if(x>=0){
+                    String n=c.getString(x);
+                    if(n!=null&&!n.trim().isEmpty())return n.trim();
+                }
+            }
+        }catch(Exception ignored){}
+        try{
+            String id=DocumentsContract.getTreeDocumentId(uri);
+            if(id!=null&&!id.isEmpty()){
+                int slash=Math.max(id.lastIndexOf('/'),id.lastIndexOf(':'));
+                String n=slash>=0?id.substring(slash+1):id;
+                if(!n.isEmpty())return n;
+            }
+        }catch(Exception ignored){}
+        return "Ponyschule";
     }
 
     private void createNotificationChannel(){
@@ -259,6 +291,29 @@ public class MainActivity extends Activity {
         @JavascriptInterface public synchronized void clearPendingDocx(){
             pendingDocxXmlB64=null; pendingDocxName=null; pendingDocxFormat=null; pendingWordUri=null; pendingWordMime=null;
         }
+        @JavascriptInterface public boolean hasNasFolder(){
+            String u=getSharedPreferences("tps_native",MODE_PRIVATE).getString("preferred_nas_folder_uri","");
+            return u!=null&&!u.isEmpty();
+        }
+        @JavascriptInterface public String getNasFolderName(){
+            String n=getSharedPreferences("tps_native",MODE_PRIVATE).getString("preferred_nas_folder_name","");
+            return n==null?"":n;
+        }
+        @JavascriptInterface public void chooseNasFolder(){
+            runOnUiThread(()->{
+                try{
+                    Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                    i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION|Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+                    if(Build.VERSION.SDK_INT>=26){
+                        String saved=getSharedPreferences("tps_native",MODE_PRIVATE).getString("preferred_nas_folder_uri","");
+                        if(saved!=null&&!saved.isEmpty())i.putExtra(DocumentsContract.EXTRA_INITIAL_URI,Uri.parse(saved));
+                    }
+                    startActivityForResult(i,NAS_FOLDER_REQUEST);
+                }catch(Exception e){
+                    Toast.makeText(MainActivity.this,"NAS-Ordnerauswahl konnte nicht geöffnet werden.",Toast.LENGTH_LONG).show();
+                }
+            });
+        }
         @JavascriptInterface public void saveBase64File(String fileName,String mimeType,String base64Data){
             runOnUiThread(() -> {
                 try{
@@ -349,6 +404,26 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode,int resultCode,Intent data){
         super.onActivityResult(requestCode,resultCode,data);
+        if(requestCode==NAS_FOLDER_REQUEST){
+            if(resultCode==RESULT_OK&&data!=null&&data.getData()!=null){
+                Uri tree=data.getData();
+                try{
+                    int flags=data.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                    getContentResolver().takePersistableUriPermission(tree,flags);
+                }catch(Exception ignored){}
+                String name=nasFolderDisplayName(tree);
+                getSharedPreferences("tps_native",MODE_PRIVATE).edit()
+                    .putString("preferred_nas_folder_uri",tree.toString())
+                    .putString("preferred_nas_folder_name",name)
+                    .apply();
+                Toast.makeText(this,"NAS-Ordner gespeichert: "+name,Toast.LENGTH_SHORT).show();
+                if(web!=null){
+                    String safe=name.replace("\\","\\\\").replace("'","\\'");
+                    web.evaluateJavascript("window.dispatchEvent(new CustomEvent('tps-nas-folder-changed',{detail:{name:'"+safe+"'}}));",null);
+                }
+            }
+            return;
+        }
         if(requestCode==SAVE_DOCUMENT_REQUEST){
             boolean ok=false;
             if(resultCode==RESULT_OK && data!=null && data.getData()!=null && pendingSaveBytes!=null){
