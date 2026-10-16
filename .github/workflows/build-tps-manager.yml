@@ -123,10 +123,18 @@ jobs:
           echo "TPS_Manager.apk size: $SIZE bytes"
           test "$SIZE" -gt 50000
 
+      - name: Read APK version for artifact name
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_VERSION=$(sed -n "s/.*versionName '\\([^']*\\)'.*/\\1/p" app/build.gradle | head -1)
+          test -n "$APP_VERSION"
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+
       - name: Upload verified APK
         uses: actions/upload-artifact@v4
         with:
-          name: TPS-Manager-Android-98.1.5-VERIFIED
+          name: TPS-Manager-Android-${{ env.APP_VERSION }}-VERIFIED
           path: TPS_Manager.apk
           if-no-files-found: error
           retention-days: 30
