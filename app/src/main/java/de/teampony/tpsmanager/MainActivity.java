@@ -22,11 +22,6 @@ import androidx.work.WorkManager;
 import java.util.concurrent.TimeUnit;
 import android.widget.Toast;
 import java.io.*;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
-import java.nio.charset.StandardCharsets;
-import org.apache.poi.hwpf.HWPFDocument;
-import org.apache.poi.hwpf.extractor.WordExtractor;
 
 public class MainActivity extends Activity {
     private static final String APP_URL = "https://phenomenal-sfogliatella-09cbcb.netlify.app/";
@@ -41,6 +36,8 @@ public class MainActivity extends Activity {
     private String pendingDocxXmlB64;
     private String pendingDocxName;
     private String pendingDocxFormat;
+    private Uri pendingWordUri;
+    private String pendingWordMime;
     private static final int DOCX_CHUNK_SIZE=48000;
     private float swipeDownX, swipeDownY;
 
@@ -84,7 +81,7 @@ public class MainActivity extends Activity {
                     intent.setType("*/*");
                     intent.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"image/*","application/pdf","application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
                 }
-                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
                 if(fileChooserIsDocx) applyLastNasLocation(intent);
                 try { startActivityForResult(intent,FILE_CHOOSER_REQUEST); return true; }
                 catch(Exception e){ fileChooserCallback=null; fileChooserIsDocx=false; Toast.makeText(MainActivity.this,"Dateiauswahl konnte nicht geöffnet werden.",Toast.LENGTH_LONG).show(); return false; }
@@ -201,10 +198,31 @@ public class MainActivity extends Activity {
         }
         @JavascriptInterface public synchronized String getPendingDocxName(){ return pendingDocxName==null?"":pendingDocxName; }
         @JavascriptInterface public synchronized String getPendingDocxFormat(){ return pendingDocxFormat==null?"":pendingDocxFormat; }
+        @JavascriptInterface public synchronized String getPendingWordName(){ return pendingDocxName==null?"":pendingDocxName; }
+        @JavascriptInterface public synchronized String getPendingWordMime(){ return pendingWordMime==null?"application/octet-stream":pendingWordMime; }
+        @JavascriptInterface public synchronized int refreshPendingWordAttachment(){
+            if(pendingWordUri==null)return -1;
+            try(InputStream in=getContentResolver().openInputStream(pendingWordUri); ByteArrayOutputStream out=new ByteArrayOutputStream()){
+                if(in==null)return -1;
+                byte[] buf=new byte[8192]; int n;
+                while((n=in.read(buf))>0){
+                    out.write(buf,0,n);
+                    if(out.size()>8*1024*1024)throw new IOException("Word-Datei ist größer als 8 MB");
+                }
+                pendingDocxXmlB64=Base64.encodeToString(out.toByteArray(),Base64.NO_WRAP);
+                return out.size();
+            }catch(Exception e){
+                pendingDocxXmlB64=null;
+                final String msg=e.getMessage();
+                runOnUiThread(()->Toast.makeText(MainActivity.this,"Word-Anhang konnte nicht gelesen werden: "+msg,Toast.LENGTH_LONG).show());
+                return -1;
+            }
+        }
         @JavascriptInterface public synchronized int getPendingDocxChunkCount(){
             if(pendingDocxXmlB64==null||pendingDocxXmlB64.isEmpty())return 0;
             return (pendingDocxXmlB64.length()+DOCX_CHUNK_SIZE-1)/DOCX_CHUNK_SIZE;
         }
+        @JavascriptInterface public synchronized int getPendingWordChunkCount(){ return getPendingDocxChunkCount(); }
         @JavascriptInterface public synchronized String getPendingDocxChunk(int index){
             if(pendingDocxXmlB64==null||index<0)return "";
             int start=index*DOCX_CHUNK_SIZE;
@@ -212,7 +230,35 @@ public class MainActivity extends Activity {
             int end=Math.min(start+DOCX_CHUNK_SIZE,pendingDocxXmlB64.length());
             return pendingDocxXmlB64.substring(start,end);
         }
-        @JavascriptInterface public synchronized void clearPendingDocx(){ pendingDocxXmlB64=null; pendingDocxName=null; pendingDocxFormat=null; }
+        @JavascriptInterface public synchronized String getPendingWordChunk(int index){ return getPendingDocxChunk(index); }
+        @JavascriptInterface public void openPendingWordForEdit(){
+            final Uri u;
+            final String mime;
+            synchronized(this){ u=pendingWordUri; mime=pendingWordMime; }
+            if(u==null){ runOnUiThread(()->Toast.makeText(MainActivity.this,"Bitte zuerst ein Word-Dokument auswählen.",Toast.LENGTH_LONG).show()); return; }
+            runOnUiThread(()->{
+                try{
+                    Intent edit=new Intent(Intent.ACTION_EDIT);
+                    edit.setDataAndType(u,(mime==null||mime.isEmpty())?"application/octet-stream":mime);
+                    edit.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                    edit.setClipData(ClipData.newUri(getContentResolver(),"TPS Word-Dokument",u));
+                    startActivity(edit);
+                }catch(Exception e){
+                    try{
+                        Intent view=new Intent(Intent.ACTION_VIEW);
+                        view.setDataAndType(u,(mime==null||mime.isEmpty())?"application/octet-stream":mime);
+                        view.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                        startActivity(view);
+                        Toast.makeText(MainActivity.this,"Kein direkter Bearbeitungsmodus gefunden. Dokument wurde geöffnet.",Toast.LENGTH_LONG).show();
+                    }catch(Exception ex){
+                        Toast.makeText(MainActivity.this,"Keine App zum Öffnen/Bearbeiten von Word-Dateien gefunden.",Toast.LENGTH_LONG).show();
+                    }
+                }
+            });
+        }
+        @JavascriptInterface public synchronized void clearPendingDocx(){
+            pendingDocxXmlB64=null; pendingDocxName=null; pendingDocxFormat=null; pendingWordUri=null; pendingWordMime=null;
+        }
         @JavascriptInterface public void saveBase64File(String fileName,String mimeType,String base64Data){
             runOnUiThread(() -> {
                 try{
@@ -264,46 +310,27 @@ public class MainActivity extends Activity {
 
     private boolean prepareDocxForWeb(Uri u){
         if(u==null)return false;
-        String name=displayName(u);
-        try(InputStream raw=getContentResolver().openInputStream(u)){
-            if(raw==null)throw new IOException("Datei konnte nicht geöffnet werden");
+        try{
+            String name=displayName(u);
+            String mime=getContentResolver().getType(u);
             String lower=(name==null?"":name).toLowerCase();
-            byte[] payload;
-            String format;
-            if(lower.endsWith(".doc") && !lower.endsWith(".docx")){
-                try(HWPFDocument doc=new HWPFDocument(raw); WordExtractor extractor=new WordExtractor(doc)){
-                    String text=extractor.getText();
-                    if(text==null||text.trim().isEmpty())throw new IOException("In der DOC-Datei wurde kein lesbarer Text gefunden");
-                    payload=text.getBytes(StandardCharsets.UTF_8);
-                    format="text";
-                }
-            }else{
-                byte[] xmlBytes=null;
-                try(ZipInputStream zin=new ZipInputStream(new BufferedInputStream(raw))){
-                    ZipEntry entry;
-                    while((entry=zin.getNextEntry())!=null){
-                        if("word/document.xml".equals(entry.getName())){
-                            ByteArrayOutputStream out=new ByteArrayOutputStream();
-                            byte[] buf=new byte[8192]; int n;
-                            while((n=zin.read(buf))>0){ out.write(buf,0,n); if(out.size()>8*1024*1024)throw new IOException("Word-Dokumentinhalt ist zu groß"); }
-                            xmlBytes=out.toByteArray(); break;
-                        }
-                    }
-                }
-                if(xmlBytes==null||xmlBytes.length==0)throw new IOException("Word-Inhalt wurde nicht gefunden");
-                payload=xmlBytes;
-                format="xml";
+            if(mime==null||mime.trim().isEmpty()){
+                mime=lower.endsWith(".docx")
+                    ?"application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    :lower.endsWith(".doc")?"application/msword":"application/octet-stream";
             }
             synchronized(this){
-                pendingDocxXmlB64=Base64.encodeToString(payload,Base64.NO_WRAP);
-                pendingDocxName=(name==null||name.trim().isEmpty())?"Workshop-Vorlage":name;
-                pendingDocxFormat=format;
+                pendingWordUri=u;
+                pendingWordMime=mime;
+                pendingDocxName=(name==null||name.trim().isEmpty())?"Workshop-Dokument":name;
+                pendingDocxFormat="attachment";
+                pendingDocxXmlB64=null;
             }
             if(web!=null)web.evaluateJavascript("window.dispatchEvent(new CustomEvent('tps-android-docx-ready'));",null);
             return true;
         }catch(Exception e){
-            synchronized(this){ pendingDocxXmlB64=null; pendingDocxName=null; pendingDocxFormat=null; }
-            Toast.makeText(this,"Word-Datei konnte nicht geöffnet werden: "+e.getMessage(),Toast.LENGTH_LONG).show();
+            synchronized(this){ pendingWordUri=null; pendingWordMime=null; pendingDocxName=null; pendingDocxFormat=null; pendingDocxXmlB64=null; }
+            Toast.makeText(this,"Word-Datei konnte nicht übernommen werden: "+e.getMessage(),Toast.LENGTH_LONG).show();
             return false;
         }
     }
