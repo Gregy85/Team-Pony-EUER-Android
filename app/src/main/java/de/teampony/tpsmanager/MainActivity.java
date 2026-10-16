@@ -325,7 +325,14 @@ public class MainActivity extends Activity {
                 if(result==null && data!=null && data.getData()!=null) result=new Uri[]{data.getData()};
                 if(fileChooserIsDocx){
                     Uri selected=(data!=null&&data.getData()!=null)?data.getData():(result!=null&&result.length>0?result[0]:null);
-                    if(selected!=null) rememberNasLocation(selected,data==null?Intent.FLAG_GRANT_READ_URI_PERMISSION:data.getFlags());
+                    if(selected!=null){
+                        rememberNasLocation(selected,data==null?Intent.FLAG_GRANT_READ_URI_PERMISSION:data.getFlags());
+                        prepareDocxForWeb(selected);
+                    }
+                    fileChooserCallback.onReceiveValue(null);
+                    fileChooserCallback=null;
+                    fileChooserIsDocx=false;
+                    return;
                 }
             }
             fileChooserCallback.onReceiveValue(result);
