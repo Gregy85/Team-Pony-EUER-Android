@@ -28,6 +28,9 @@ public class MainActivity extends Activity {
     private Uri pendingPdf;
     private ValueCallback<Uri[]> fileChooserCallback;
     private static final int FILE_CHOOSER_REQUEST = 1201;
+    private static final int SAVE_DOCUMENT_REQUEST = 1202;
+    private byte[] pendingSaveBytes;
+    private String pendingSaveName;
     private float swipeDownX, swipeDownY;
 
     @Override public void onCreate(Bundle b) {
@@ -67,7 +70,7 @@ public class MainActivity extends Activity {
                     intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
                     intent.addCategory(Intent.CATEGORY_OPENABLE);
                     intent.setType("*/*");
-                    intent.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"image/*","application/pdf"});
+                    intent.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"image/*","application/pdf","application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
                 }
                 try { startActivityForResult(intent,FILE_CHOOSER_REQUEST); return true; }
                 catch(Exception e){ fileChooserCallback=null; Toast.makeText(MainActivity.this,"Dateiauswahl konnte nicht geöffnet werden.",Toast.LENGTH_LONG).show(); return false; }
@@ -140,6 +143,26 @@ public class MainActivity extends Activity {
                 return Build.VERSION.SDK_INT>=28 ? p.getLongVersionCode() : p.versionCode;
             } catch(Exception e){ return -1; }
         }
+        @JavascriptInterface public void saveBase64File(String fileName,String mimeType,String base64Data){
+            runOnUiThread(() -> {
+                try{
+                    byte[] bytes=Base64.decode(base64Data,Base64.DEFAULT);
+                    if(bytes.length>25*1024*1024) throw new IOException("Datei ist größer als 25 MB");
+                    pendingSaveBytes=bytes;
+                    pendingSaveName=(fileName==null||fileName.trim().isEmpty())?"Workshop-Vorlage.docx":fileName.trim();
+                    Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType((mimeType==null||mimeType.trim().isEmpty())?"application/octet-stream":mimeType);
+                    intent.putExtra(Intent.EXTRA_TITLE,pendingSaveName);
+                    startActivityForResult(intent,SAVE_DOCUMENT_REQUEST);
+                }catch(Exception e){
+                    pendingSaveBytes=null;
+                    pendingSaveName=null;
+                    Toast.makeText(MainActivity.this,"Datei konnte nicht vorbereitet werden: "+e.getMessage(),Toast.LENGTH_LONG).show();
+                    if(web!=null)web.evaluateJavascript("window.dispatchEvent(new CustomEvent('tps-native-file-saved',{detail:{ok:false}}));",null);
+                }
+            });
+        }
         @JavascriptInterface public void syncSession(String json){
             try{
                 org.json.JSONObject o=new org.json.JSONObject(json);
@@ -182,6 +205,25 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode,int resultCode,Intent data){
         super.onActivityResult(requestCode,resultCode,data);
+        if(requestCode==SAVE_DOCUMENT_REQUEST){
+            boolean ok=false;
+            if(resultCode==RESULT_OK && data!=null && data.getData()!=null && pendingSaveBytes!=null){
+                try(OutputStream out=getContentResolver().openOutputStream(data.getData(),"w")){
+                    if(out==null)throw new IOException("Speicherziel konnte nicht geöffnet werden");
+                    out.write(pendingSaveBytes);
+                    out.flush();
+                    ok=true;
+                    Toast.makeText(this,"Word-Vorlage gespeichert",Toast.LENGTH_SHORT).show();
+                }catch(Exception e){
+                    Toast.makeText(this,"Speichern fehlgeschlagen: "+e.getMessage(),Toast.LENGTH_LONG).show();
+                }
+            }
+            pendingSaveBytes=null;
+            pendingSaveName=null;
+            final boolean saved=ok;
+            if(web!=null)web.evaluateJavascript("window.dispatchEvent(new CustomEvent('tps-native-file-saved',{detail:{ok:"+(saved?"true":"false")+"}}));",null);
+            return;
+        }
         if(requestCode==FILE_CHOOSER_REQUEST && fileChooserCallback!=null){
             Uri[] result=null;
             if(resultCode==RESULT_OK){
