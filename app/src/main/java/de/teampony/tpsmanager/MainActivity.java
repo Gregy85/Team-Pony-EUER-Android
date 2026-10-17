@@ -6,15 +6,12 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.*;
-import android.content.ContentValues;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
-import android.os.Environment;
 import android.graphics.Color;
 import android.provider.OpenableColumns;
-import android.provider.MediaStore;
 import android.provider.DocumentsContract;
 import android.util.Base64;
 import android.webkit.*;
@@ -25,6 +22,11 @@ import androidx.work.WorkManager;
 import java.util.concurrent.TimeUnit;
 import android.widget.Toast;
 import java.io.*;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.nio.charset.StandardCharsets;
+import org.apache.poi.hwpf.HWPFDocument;
+import org.apache.poi.hwpf.extractor.WordExtractor;
 
 public class MainActivity extends Activity {
     private static final String APP_URL = "https://phenomenal-sfogliatella-09cbcb.netlify.app/";
@@ -41,7 +43,6 @@ public class MainActivity extends Activity {
     private String pendingDocxName;
     private String pendingDocxFormat;
     private Uri pendingWordUri;
-    private Uri pendingWordSourceUri;
     private String pendingWordMime;
     private static final int DOCX_CHUNK_SIZE=48000;
     private float swipeDownX, swipeDownY;
@@ -188,91 +189,6 @@ public class MainActivity extends Activity {
         return "Ponyschule";
     }
 
-    private Uri createEditableWordCopy(Uri source,String fileName,String mime) throws IOException{
-        if(source==null)throw new IOException("Quelldatei fehlt");
-        if(Build.VERSION.SDK_INT<29)return source;
-        String safeName=(fileName==null||fileName.trim().isEmpty())?"Workshop-Dokument.docx":fileName.trim();
-        String safeMime=(mime==null||mime.trim().isEmpty())?"application/octet-stream":mime.trim();
-        ContentValues values=new ContentValues();
-        values.put(MediaStore.MediaColumns.DISPLAY_NAME,safeName);
-        values.put(MediaStore.MediaColumns.MIME_TYPE,safeMime);
-        values.put(MediaStore.MediaColumns.RELATIVE_PATH,Environment.DIRECTORY_DOWNLOADS+"/TPS Manager");
-        values.put(MediaStore.MediaColumns.IS_PENDING,1);
-        Uri dest=getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,values);
-        if(dest==null)throw new IOException("Lokale Word-Arbeitskopie konnte nicht angelegt werden");
-        try(InputStream in=getContentResolver().openInputStream(source); OutputStream out=getContentResolver().openOutputStream(dest,"w")){
-            if(in==null||out==null)throw new IOException("Word-Datei konnte nicht kopiert werden");
-            byte[] buf=new byte[8192]; int n; long total=0;
-            while((n=in.read(buf))>0){
-                out.write(buf,0,n); total+=n;
-                if(total>25L*1024L*1024L)throw new IOException("Word-Datei ist größer als 25 MB");
-            }
-            out.flush();
-        }catch(Exception e){
-            try{getContentResolver().delete(dest,null,null);}catch(Exception ignored){}
-            if(e instanceof IOException)throw (IOException)e;
-            throw new IOException(e.getMessage(),e);
-        }
-        ContentValues ready=new ContentValues();
-        ready.put(MediaStore.MediaColumns.IS_PENDING,0);
-        getContentResolver().update(dest,ready,null,null);
-        return dest;
-    }
-
-    private synchronized void restorePendingWord(){
-        if(pendingWordUri!=null)return;
-        try{
-            android.content.SharedPreferences p=getSharedPreferences("tps_native",MODE_PRIVATE);
-            String uri=p.getString("pending_word_uri","");
-            if(uri==null||uri.isEmpty())return;
-            pendingWordUri=Uri.parse(uri);
-            String src=p.getString("pending_word_source_uri","");
-            pendingWordSourceUri=(src==null||src.isEmpty())?null:Uri.parse(src);
-            pendingWordMime=p.getString("pending_word_mime","");
-            pendingDocxName=p.getString("pending_word_name","");
-            pendingDocxFormat="attachment";
-        }catch(Exception ignored){}
-    }
-
-    private synchronized void persistPendingWord(){
-        if(pendingWordUri==null)return;
-        getSharedPreferences("tps_native",MODE_PRIVATE).edit()
-            .putString("pending_word_uri",pendingWordUri.toString())
-            .putString("pending_word_source_uri",pendingWordSourceUri==null?"":pendingWordSourceUri.toString())
-            .putString("pending_word_mime",pendingWordMime==null?"":pendingWordMime)
-            .putString("pending_word_name",pendingDocxName==null?"":pendingDocxName)
-            .apply();
-    }
-
-    private void openWordUriForEdit(Uri u,String mime){
-        if(u==null){ Toast.makeText(this,"Bitte zuerst ein Word-Dokument auswählen.",Toast.LENGTH_LONG).show(); return; }
-        String m=(mime==null||mime.trim().isEmpty())?"application/octet-stream":mime;
-        Intent edit=new Intent(Intent.ACTION_EDIT);
-        edit.setDataAndType(u,m);
-        edit.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-        edit.setClipData(ClipData.newUri(getContentResolver(),"TPS Word-Dokument",u));
-
-        // Microsoft Word direkt verwenden, wenn installiert.
-        Intent word=new Intent(edit);
-        word.setPackage("com.microsoft.office.word");
-        try{
-            if(word.resolveActivity(getPackageManager())!=null){ startActivity(word); return; }
-        }catch(Exception ignored){}
-
-        // Microsoft 365 / Office als zweiter direkter Versuch.
-        Intent office=new Intent(edit);
-        office.setPackage("com.microsoft.office.officehubrow");
-        try{
-            if(office.resolveActivity(getPackageManager())!=null){ startActivity(office); return; }
-        }catch(Exception ignored){}
-
-        try{
-            startActivity(edit);
-        }catch(Exception e){
-            Toast.makeText(this,"Word konnte nicht geöffnet werden. Bitte Microsoft Word als Standard-App für .doc/.docx prüfen.",Toast.LENGTH_LONG).show();
-        }
-    }
-
     private void createNotificationChannel(){
         if(Build.VERSION.SDK_INT>=26){
             NotificationChannel ch=new NotificationChannel("tps_booking_updates","TPS Manager Hinweise",NotificationManager.IMPORTANCE_DEFAULT);
@@ -317,12 +233,11 @@ public class MainActivity extends Activity {
                 return Build.VERSION.SDK_INT>=28 ? p.getLongVersionCode() : p.versionCode;
             } catch(Exception e){ return -1; }
         }
-        @JavascriptInterface public synchronized String getPendingDocxName(){ restorePendingWord(); return pendingDocxName==null?"":pendingDocxName; }
+        @JavascriptInterface public synchronized String getPendingDocxName(){ return pendingDocxName==null?"":pendingDocxName; }
         @JavascriptInterface public synchronized String getPendingDocxFormat(){ return pendingDocxFormat==null?"":pendingDocxFormat; }
-        @JavascriptInterface public synchronized String getPendingWordName(){ restorePendingWord(); return pendingDocxName==null?"":pendingDocxName; }
-        @JavascriptInterface public synchronized String getPendingWordMime(){ restorePendingWord(); return pendingWordMime==null?"application/octet-stream":pendingWordMime; }
+        @JavascriptInterface public synchronized String getPendingWordName(){ return pendingDocxName==null?"":pendingDocxName; }
+        @JavascriptInterface public synchronized String getPendingWordMime(){ return pendingWordMime==null?"application/octet-stream":pendingWordMime; }
         @JavascriptInterface public synchronized int refreshPendingWordAttachment(){
-            restorePendingWord();
             if(pendingWordUri==null)return -1;
             try(InputStream in=getContentResolver().openInputStream(pendingWordUri); ByteArrayOutputStream out=new ByteArrayOutputStream()){
                 if(in==null)return -1;
@@ -353,32 +268,33 @@ public class MainActivity extends Activity {
             return pendingDocxXmlB64.substring(start,end);
         }
         @JavascriptInterface public synchronized String getPendingWordChunk(int index){ return getPendingDocxChunk(index); }
-        @JavascriptInterface public boolean savePendingWordBackToSource(){
-            restorePendingWord();
-            if(pendingWordUri==null||pendingWordSourceUri==null)return false;
-            try(InputStream in=getContentResolver().openInputStream(pendingWordUri); OutputStream out=getContentResolver().openOutputStream(pendingWordSourceUri,"w")){
-                if(in==null||out==null)return false;
-                byte[] buf=new byte[8192]; int n;
-                while((n=in.read(buf))>0)out.write(buf,0,n);
-                out.flush();
-                runOnUiThread(()->Toast.makeText(MainActivity.this,"Bearbeitete Word-Datei aufs NAS zurückgespeichert",Toast.LENGTH_SHORT).show());
-                return true;
-            }catch(Exception e){
-                final String msg=e.getMessage();
-                runOnUiThread(()->Toast.makeText(MainActivity.this,"NAS-Speichern fehlgeschlagen: "+msg,Toast.LENGTH_LONG).show());
-                return false;
-            }
-        }
         @JavascriptInterface public void openPendingWordForEdit(){
+            final Uri u;
+            final String mime;
+            synchronized(this){ u=pendingWordUri; mime=pendingWordMime; }
+            if(u==null){ runOnUiThread(()->Toast.makeText(MainActivity.this,"Bitte zuerst ein Word-Dokument auswählen.",Toast.LENGTH_LONG).show()); return; }
             runOnUiThread(()->{
-                restorePendingWord();
-                openWordUriForEdit(pendingWordUri,pendingWordMime);
+                try{
+                    Intent edit=new Intent(Intent.ACTION_EDIT);
+                    edit.setDataAndType(u,(mime==null||mime.isEmpty())?"application/octet-stream":mime);
+                    edit.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                    edit.setClipData(ClipData.newUri(getContentResolver(),"TPS Word-Dokument",u));
+                    startActivity(edit);
+                }catch(Exception e){
+                    try{
+                        Intent view=new Intent(Intent.ACTION_VIEW);
+                        view.setDataAndType(u,(mime==null||mime.isEmpty())?"application/octet-stream":mime);
+                        view.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                        startActivity(view);
+                        Toast.makeText(MainActivity.this,"Kein direkter Bearbeitungsmodus gefunden. Dokument wurde geöffnet.",Toast.LENGTH_LONG).show();
+                    }catch(Exception ex){
+                        Toast.makeText(MainActivity.this,"Keine App zum Öffnen/Bearbeiten von Word-Dateien gefunden.",Toast.LENGTH_LONG).show();
+                    }
+                }
             });
         }
         @JavascriptInterface public synchronized void clearPendingDocx(){
-            pendingDocxXmlB64=null; pendingDocxName=null; pendingDocxFormat=null; pendingWordUri=null; pendingWordSourceUri=null; pendingWordMime=null;
-            getSharedPreferences("tps_native",MODE_PRIVATE).edit()
-                .remove("pending_word_uri").remove("pending_word_source_uri").remove("pending_word_mime").remove("pending_word_name").apply();
+            pendingDocxXmlB64=null; pendingDocxName=null; pendingDocxFormat=null; pendingWordUri=null; pendingWordMime=null;
         }
         @JavascriptInterface public boolean hasNasFolder(){
             String u=getSharedPreferences("tps_native",MODE_PRIVATE).getString("preferred_nas_folder_uri","");
@@ -454,31 +370,60 @@ public class MainActivity extends Activity {
 
     private boolean prepareDocxForWeb(Uri u){
         if(u==null)return false;
-        try{
-            String name=displayName(u);
-            String mime=getContentResolver().getType(u);
+        String name=displayName(u);
+        try(InputStream raw=getContentResolver().openInputStream(u)){
+            if(raw==null)throw new IOException("Datei konnte nicht geöffnet werden");
             String lower=(name==null?"":name).toLowerCase();
+            String mime=getContentResolver().getType(u);
             if(mime==null||mime.trim().isEmpty()){
                 mime=lower.endsWith(".docx")
                     ?"application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     :lower.endsWith(".doc")?"application/msword":"application/octet-stream";
             }
-            Uri editable=createEditableWordCopy(u,name,mime);
+            byte[] payload;
+            String format;
+            if(lower.endsWith(".doc") && !lower.endsWith(".docx")){
+                try(HWPFDocument doc=new HWPFDocument(raw); WordExtractor extractor=new WordExtractor(doc)){
+                    String text=extractor.getText();
+                    if(text==null||text.trim().isEmpty())throw new IOException("In der DOC-Datei wurde kein lesbarer Text gefunden");
+                    payload=text.getBytes(StandardCharsets.UTF_8);
+                    format="text";
+                }
+            }else{
+                byte[] xmlBytes=null;
+                try(ZipInputStream zin=new ZipInputStream(new BufferedInputStream(raw))){
+                    ZipEntry entry;
+                    while((entry=zin.getNextEntry())!=null){
+                        if("word/document.xml".equals(entry.getName())){
+                            ByteArrayOutputStream out=new ByteArrayOutputStream();
+                            byte[] buf=new byte[8192]; int n;
+                            while((n=zin.read(buf))>0){
+                                out.write(buf,0,n);
+                                if(out.size()>8*1024*1024)throw new IOException("Word-Dokumentinhalt ist zu groß");
+                            }
+                            xmlBytes=out.toByteArray();
+                            break;
+                        }
+                    }
+                }
+                if(xmlBytes==null||xmlBytes.length==0)throw new IOException("Word-Inhalt wurde nicht gefunden");
+                payload=xmlBytes;
+                format="xml";
+            }
             synchronized(this){
-                pendingWordSourceUri=u;
-                pendingWordUri=editable;
+                pendingWordUri=u;
                 pendingWordMime=mime;
                 pendingDocxName=(name==null||name.trim().isEmpty())?"Workshop-Dokument":name;
-                pendingDocxFormat="attachment";
-                pendingDocxXmlB64=null;
-                persistPendingWord();
+                pendingDocxFormat=format;
+                pendingDocxXmlB64=Base64.encodeToString(payload,Base64.NO_WRAP);
             }
-            Toast.makeText(this,"Word-Arbeitskopie bereit – wird in Microsoft Word geöffnet",Toast.LENGTH_SHORT).show();
-            if(web!=null)web.evaluateJavascript("window.dispatchEvent(new CustomEvent('tps-android-word-selected'));",null);
+            if(web!=null)web.evaluateJavascript("window.dispatchEvent(new CustomEvent('tps-android-docx-ready'));",null);
             return true;
         }catch(Exception e){
-            synchronized(this){ pendingWordSourceUri=null; pendingWordUri=null; pendingWordMime=null; pendingDocxName=null; pendingDocxFormat=null; pendingDocxXmlB64=null; }
-            Toast.makeText(this,"Word-Datei konnte nicht vorbereitet werden: "+e.getMessage(),Toast.LENGTH_LONG).show();
+            synchronized(this){
+                pendingWordUri=null; pendingWordMime=null; pendingDocxName=null; pendingDocxFormat=null; pendingDocxXmlB64=null;
+            }
+            Toast.makeText(this,"Word-Datei konnte nicht gelesen werden: "+e.getMessage(),Toast.LENGTH_LONG).show();
             return false;
         }
     }
@@ -546,15 +491,7 @@ public class MainActivity extends Activity {
                     Uri selected=(data!=null&&data.getData()!=null)?data.getData():(result!=null&&result.length>0?result[0]:null);
                     if(selected!=null){
                         rememberNasLocation(selected,data==null?Intent.FLAG_GRANT_READ_URI_PERMISSION:data.getFlags());
-                        if(prepareDocxForWeb(selected)){
-                            final Uri selectedFinal=selected;
-                            final String selectedMime=pendingWordMime;
-                            fileChooserCallback.onReceiveValue(null);
-                            fileChooserCallback=null;
-                            fileChooserIsDocx=false;
-                            runOnUiThread(()->openWordUriForEdit(selectedFinal,selectedMime));
-                            return;
-                        }
+                        prepareDocxForWeb(selected);
                     }
                     fileChooserCallback.onReceiveValue(null);
                     fileChooserCallback=null;
