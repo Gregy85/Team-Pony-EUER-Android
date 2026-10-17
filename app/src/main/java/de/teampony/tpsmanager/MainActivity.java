@@ -6,12 +6,15 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.*;
+import android.content.ContentValues;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
+import android.os.Environment;
 import android.graphics.Color;
 import android.provider.OpenableColumns;
+import android.provider.MediaStore;
 import android.provider.DocumentsContract;
 import android.util.Base64;
 import android.webkit.*;
@@ -38,6 +41,7 @@ public class MainActivity extends Activity {
     private String pendingDocxName;
     private String pendingDocxFormat;
     private Uri pendingWordUri;
+    private Uri pendingWordSourceUri;
     private String pendingWordMime;
     private static final int DOCX_CHUNK_SIZE=48000;
     private float swipeDownX, swipeDownY;
@@ -184,6 +188,37 @@ public class MainActivity extends Activity {
         return "Ponyschule";
     }
 
+    private Uri createEditableWordCopy(Uri source,String fileName,String mime) throws IOException{
+        if(source==null)throw new IOException("Quelldatei fehlt");
+        if(Build.VERSION.SDK_INT<29)return source;
+        String safeName=(fileName==null||fileName.trim().isEmpty())?"Workshop-Dokument.docx":fileName.trim();
+        String safeMime=(mime==null||mime.trim().isEmpty())?"application/octet-stream":mime.trim();
+        ContentValues values=new ContentValues();
+        values.put(MediaStore.MediaColumns.DISPLAY_NAME,safeName);
+        values.put(MediaStore.MediaColumns.MIME_TYPE,safeMime);
+        values.put(MediaStore.MediaColumns.RELATIVE_PATH,Environment.DIRECTORY_DOWNLOADS+"/TPS Manager");
+        values.put(MediaStore.MediaColumns.IS_PENDING,1);
+        Uri dest=getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,values);
+        if(dest==null)throw new IOException("Lokale Word-Arbeitskopie konnte nicht angelegt werden");
+        try(InputStream in=getContentResolver().openInputStream(source); OutputStream out=getContentResolver().openOutputStream(dest,"w")){
+            if(in==null||out==null)throw new IOException("Word-Datei konnte nicht kopiert werden");
+            byte[] buf=new byte[8192]; int n; long total=0;
+            while((n=in.read(buf))>0){
+                out.write(buf,0,n); total+=n;
+                if(total>25L*1024L*1024L)throw new IOException("Word-Datei ist größer als 25 MB");
+            }
+            out.flush();
+        }catch(Exception e){
+            try{getContentResolver().delete(dest,null,null);}catch(Exception ignored){}
+            if(e instanceof IOException)throw (IOException)e;
+            throw new IOException(e.getMessage(),e);
+        }
+        ContentValues ready=new ContentValues();
+        ready.put(MediaStore.MediaColumns.IS_PENDING,0);
+        getContentResolver().update(dest,ready,null,null);
+        return dest;
+    }
+
     private synchronized void restorePendingWord(){
         if(pendingWordUri!=null)return;
         try{
@@ -191,6 +226,8 @@ public class MainActivity extends Activity {
             String uri=p.getString("pending_word_uri","");
             if(uri==null||uri.isEmpty())return;
             pendingWordUri=Uri.parse(uri);
+            String src=p.getString("pending_word_source_uri","");
+            pendingWordSourceUri=(src==null||src.isEmpty())?null:Uri.parse(src);
             pendingWordMime=p.getString("pending_word_mime","");
             pendingDocxName=p.getString("pending_word_name","");
             pendingDocxFormat="attachment";
@@ -201,6 +238,7 @@ public class MainActivity extends Activity {
         if(pendingWordUri==null)return;
         getSharedPreferences("tps_native",MODE_PRIVATE).edit()
             .putString("pending_word_uri",pendingWordUri.toString())
+            .putString("pending_word_source_uri",pendingWordSourceUri==null?"":pendingWordSourceUri.toString())
             .putString("pending_word_mime",pendingWordMime==null?"":pendingWordMime)
             .putString("pending_word_name",pendingDocxName==null?"":pendingDocxName)
             .apply();
@@ -315,6 +353,22 @@ public class MainActivity extends Activity {
             return pendingDocxXmlB64.substring(start,end);
         }
         @JavascriptInterface public synchronized String getPendingWordChunk(int index){ return getPendingDocxChunk(index); }
+        @JavascriptInterface public boolean savePendingWordBackToSource(){
+            restorePendingWord();
+            if(pendingWordUri==null||pendingWordSourceUri==null)return false;
+            try(InputStream in=getContentResolver().openInputStream(pendingWordUri); OutputStream out=getContentResolver().openOutputStream(pendingWordSourceUri,"w")){
+                if(in==null||out==null)return false;
+                byte[] buf=new byte[8192]; int n;
+                while((n=in.read(buf))>0)out.write(buf,0,n);
+                out.flush();
+                runOnUiThread(()->Toast.makeText(MainActivity.this,"Bearbeitete Word-Datei aufs NAS zurückgespeichert",Toast.LENGTH_SHORT).show());
+                return true;
+            }catch(Exception e){
+                final String msg=e.getMessage();
+                runOnUiThread(()->Toast.makeText(MainActivity.this,"NAS-Speichern fehlgeschlagen: "+msg,Toast.LENGTH_LONG).show());
+                return false;
+            }
+        }
         @JavascriptInterface public void openPendingWordForEdit(){
             runOnUiThread(()->{
                 restorePendingWord();
@@ -322,9 +376,9 @@ public class MainActivity extends Activity {
             });
         }
         @JavascriptInterface public synchronized void clearPendingDocx(){
-            pendingDocxXmlB64=null; pendingDocxName=null; pendingDocxFormat=null; pendingWordUri=null; pendingWordMime=null;
+            pendingDocxXmlB64=null; pendingDocxName=null; pendingDocxFormat=null; pendingWordUri=null; pendingWordSourceUri=null; pendingWordMime=null;
             getSharedPreferences("tps_native",MODE_PRIVATE).edit()
-                .remove("pending_word_uri").remove("pending_word_mime").remove("pending_word_name").apply();
+                .remove("pending_word_uri").remove("pending_word_source_uri").remove("pending_word_mime").remove("pending_word_name").apply();
         }
         @JavascriptInterface public boolean hasNasFolder(){
             String u=getSharedPreferences("tps_native",MODE_PRIVATE).getString("preferred_nas_folder_uri","");
@@ -409,19 +463,22 @@ public class MainActivity extends Activity {
                     ?"application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     :lower.endsWith(".doc")?"application/msword":"application/octet-stream";
             }
+            Uri editable=createEditableWordCopy(u,name,mime);
             synchronized(this){
-                pendingWordUri=u;
+                pendingWordSourceUri=u;
+                pendingWordUri=editable;
                 pendingWordMime=mime;
                 pendingDocxName=(name==null||name.trim().isEmpty())?"Workshop-Dokument":name;
                 pendingDocxFormat="attachment";
                 pendingDocxXmlB64=null;
                 persistPendingWord();
             }
+            Toast.makeText(this,"Word-Arbeitskopie bereit – wird in Microsoft Word geöffnet",Toast.LENGTH_SHORT).show();
             if(web!=null)web.evaluateJavascript("window.dispatchEvent(new CustomEvent('tps-android-word-selected'));",null);
             return true;
         }catch(Exception e){
-            synchronized(this){ pendingWordUri=null; pendingWordMime=null; pendingDocxName=null; pendingDocxFormat=null; pendingDocxXmlB64=null; }
-            Toast.makeText(this,"Word-Datei konnte nicht übernommen werden: "+e.getMessage(),Toast.LENGTH_LONG).show();
+            synchronized(this){ pendingWordSourceUri=null; pendingWordUri=null; pendingWordMime=null; pendingDocxName=null; pendingDocxFormat=null; pendingDocxXmlB64=null; }
+            Toast.makeText(this,"Word-Datei konnte nicht vorbereitet werden: "+e.getMessage(),Toast.LENGTH_LONG).show();
             return false;
         }
     }
