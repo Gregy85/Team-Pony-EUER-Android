@@ -36,6 +36,8 @@ public class MainActivity extends Activity {
     private boolean fileChooserIsDocx=false;
     private boolean fileChooserIsMultiple=false;
     private static final int FILE_CHOOSER_REQUEST = 1201;
+    private static final String FILE_MANAGER_PLUS_PACKAGE = "com.alphainventor.filemanager";
+    private static final String PREF_LAST_MEDIA_URI = "last_media_location_uri";
     private static final int SAVE_DOCUMENT_REQUEST = 1202;
     private static final int NAS_FOLDER_REQUEST = 1203;
     private byte[] pendingSaveBytes;
@@ -89,28 +91,11 @@ public class MainActivity extends Activity {
                     intent.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"application/msword","application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
                     applyLastNasLocation(intent);
                 }else if(fileChooserIsMultiple){
-                    // Android-WebView liefert Mehrfachauswahl nicht auf allen Geräten zuverlässig
-                    // über FileChooserParams.createIntent(). Deshalb öffnen wir für HTML-input[multiple]
-                    // bewusst den nativen Android-Dokumentpicker und sammeln ClipData selbst ein.
-                    intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
-                    intent.addCategory(Intent.CATEGORY_OPENABLE);
-                    java.util.ArrayList<String> mimeTypes=new java.util.ArrayList<>();
-                    try{
-                        String[] accept=params==null?null:params.getAcceptTypes();
-                        if(accept!=null)for(String raw:accept){
-                            if(raw==null)continue;
-                            for(String part:raw.split(",")){
-                                String t=part.trim();
-                                if(t.contains("/") && !mimeTypes.contains(t))mimeTypes.add(t);
-                            }
-                        }
-                    }catch(Exception ignored){}
-                    if(mimeTypes.size()==1) intent.setType(mimeTypes.get(0));
-                    else{
-                        intent.setType("*/*");
-                        if(!mimeTypes.isEmpty()) intent.putExtra(Intent.EXTRA_MIME_TYPES,mimeTypes.toArray(new String[mimeTypes.size()]));
-                    }
-                    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);
+                    if(launchMultipleMediaPicker(params)) return true;
+                    fileChooserCallback=null;
+                    fileChooserIsDocx=false;
+                    fileChooserIsMultiple=false;
+                    return false;
                 }else{
                     try { intent=params.createIntent(); }
                     catch(Exception e){
@@ -147,6 +132,82 @@ public class MainActivity extends Activity {
         web.loadUrl(APP_URL);
     }
 
+
+    private java.util.ArrayList<String> collectAcceptedMimeTypes(WebChromeClient.FileChooserParams params){
+        java.util.ArrayList<String> mimeTypes=new java.util.ArrayList<>();
+        try{
+            String[] accept=params==null?null:params.getAcceptTypes();
+            if(accept!=null)for(String raw:accept){
+                if(raw==null)continue;
+                for(String part:raw.split(",")){
+                    String t=part.trim().toLowerCase();
+                    if(t.contains("/") && !mimeTypes.contains(t))mimeTypes.add(t);
+                }
+            }
+        }catch(Exception ignored){}
+        if(mimeTypes.isEmpty()){
+            mimeTypes.add("image/*");
+            mimeTypes.add("video/*");
+        }
+        return mimeTypes;
+    }
+
+    private void configureMultipleMediaIntent(Intent intent,WebChromeClient.FileChooserParams params){
+        java.util.ArrayList<String> mimeTypes=collectAcceptedMimeTypes(params);
+        if(mimeTypes.size()==1) intent.setType(mimeTypes.get(0));
+        else{
+            intent.setType("*/*");
+            intent.putExtra(Intent.EXTRA_MIME_TYPES,mimeTypes.toArray(new String[mimeTypes.size()]));
+        }
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+    }
+
+    private void applyLastMediaLocation(Intent intent){
+        if(Build.VERSION.SDK_INT<26 || intent==null)return;
+        try{
+            String saved=getSharedPreferences("tps_native",MODE_PRIVATE).getString(PREF_LAST_MEDIA_URI,"");
+            if(saved!=null&&!saved.isEmpty()) intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI,Uri.parse(saved));
+        }catch(Exception ignored){}
+    }
+
+    private void rememberLastMediaLocation(Uri uri,int flags){
+        if(uri==null)return;
+        try{
+            int takeFlags=flags&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            if(takeFlags!=0)getContentResolver().takePersistableUriPermission(uri,takeFlags);
+        }catch(Exception ignored){}
+        try{
+            getSharedPreferences("tps_native",MODE_PRIVATE).edit().putString(PREF_LAST_MEDIA_URI,uri.toString()).apply();
+        }catch(Exception ignored){}
+    }
+
+    private boolean launchMultipleMediaPicker(WebChromeClient.FileChooserParams params){
+        // Bevorzugt Dateimanager +, wenn er den Android-Auswahldialog anbietet.
+        // ACTION_GET_CONTENT ist der uebliche Vertrag fuer externe Dateimanager.
+        try{
+            Intent fm=new Intent(Intent.ACTION_GET_CONTENT);
+            configureMultipleMediaIntent(fm,params);
+            fm.setPackage(FILE_MANAGER_PLUS_PACKAGE);
+            applyLastMediaLocation(fm);
+            startActivityForResult(fm,FILE_CHOOSER_REQUEST);
+            return true;
+        }catch(Exception ignored){}
+
+        // Sicherer Fallback: Android Storage Access Framework. Hier kann TPS den
+        // zuletzt erfolgreich verwendeten Ort per EXTRA_INITIAL_URI wieder oeffnen.
+        try{
+            Intent system=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            configureMultipleMediaIntent(system,params);
+            applyLastMediaLocation(system);
+            startActivityForResult(system,FILE_CHOOSER_REQUEST);
+            return true;
+        }catch(Exception e){
+            Toast.makeText(MainActivity.this,"Mehrfachauswahl konnte nicht geöffnet werden.",Toast.LENGTH_LONG).show();
+            return false;
+        }
+    }
 
     private boolean isDocxChooser(WebChromeClient.FileChooserParams params){
         try{
@@ -522,10 +583,14 @@ public class MainActivity extends Activity {
                         }
                     }catch(Exception ignored){}
                     if(data.getData()!=null)picked.add(data.getData());
-                    if(!picked.isEmpty())result=picked.toArray(new Uri[picked.size()]);
+                    if(!picked.isEmpty()){
+                        result=picked.toArray(new Uri[picked.size()]);
+                        rememberLastMediaLocation(result[0],data.getFlags());
+                    }
                 }
                 if(result==null) result=WebChromeClient.FileChooserParams.parseResult(resultCode,data);
                 if(result==null && data!=null && data.getData()!=null) result=new Uri[]{data.getData()};
+                if(fileChooserIsMultiple && result!=null && result.length>0 && data!=null) rememberLastMediaLocation(result[0],data.getFlags());
                 if(fileChooserIsDocx){
                     Uri selected=(data!=null&&data.getData()!=null)?data.getData():(result!=null&&result.length>0?result[0]:null);
                     if(selected!=null){
