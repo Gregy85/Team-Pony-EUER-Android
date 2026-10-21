@@ -40,6 +40,9 @@ public class MainActivity extends Activity {
     private static final String PREF_LAST_MEDIA_URI = "last_media_location_uri";
     private static final int SAVE_DOCUMENT_REQUEST = 1202;
     private static final int NAS_FOLDER_REQUEST = 1203;
+    private static final int AUDIO_FOLDER_REQUEST = 1204;
+    private static final String PREF_AUDIO_FOLDER_URI = "preferred_audio_folder_uri";
+    private static final String PREF_AUDIO_FOLDER_NAME = "preferred_audio_folder_name";
     private byte[] pendingSaveBytes;
     private String pendingSaveName;
     private String pendingDocxXmlB64;
@@ -48,6 +51,13 @@ public class MainActivity extends Activity {
     private Uri pendingWordUri;
     private String pendingWordMime;
     private static final int DOCX_CHUNK_SIZE=48000;
+    private static final int NAS_AUDIO_CHUNK_SIZE=48000;
+    private String pendingNasAudioB64;
+    private String pendingNasAudioName;
+    private String pendingNasAudioMime;
+    private android.media.MediaPlayer nasAudioPlayer;
+    private final java.util.HashSet<String> allowedAudioFolderUris=new java.util.HashSet<>();
+    private final java.util.HashSet<String> allowedAudioFileUris=new java.util.HashSet<>();
     private float swipeDownX, swipeDownY;
 
     @Override public void onCreate(Bundle b) {
@@ -275,6 +285,180 @@ public class MainActivity extends Activity {
         return "Ponyschule";
     }
 
+
+    private Uri getSavedAudioTree(){
+        try{
+            String u=getSharedPreferences("tps_native",MODE_PRIVATE).getString(PREF_AUDIO_FOLDER_URI,"");
+            return (u==null||u.isEmpty())?null:Uri.parse(u);
+        }catch(Exception ignored){ return null; }
+    }
+
+    private Uri treeRootDocument(Uri tree){
+        if(tree==null)return null;
+        try{
+            String id=DocumentsContract.getTreeDocumentId(tree);
+            return DocumentsContract.buildDocumentUriUsingTree(tree,id);
+        }catch(Exception e){ return tree; }
+    }
+
+    private String documentIdFor(Uri uri){
+        if(uri==null)return "";
+        try{return DocumentsContract.getDocumentId(uri);}catch(Exception ignored){}
+        try{return DocumentsContract.getTreeDocumentId(uri);}catch(Exception ignored){}
+        return "";
+    }
+
+    private boolean isAudioFile(String name,String mime){
+        String n=name==null?"":name.toLowerCase();
+        String m=mime==null?"":mime.toLowerCase();
+        return m.startsWith("audio/") || n.endsWith(".mp3") || n.endsWith(".wav") || n.endsWith(".m4a") ||
+               n.endsWith(".aac") || n.endsWith(".ogg") || n.endsWith(".flac") || n.endsWith(".opus");
+    }
+
+    private String jsonError(String message){
+        try{
+            org.json.JSONObject o=new org.json.JSONObject();
+            o.put("ok",false);o.put("error",message==null?"Unbekannter Fehler":message);
+            return o.toString();
+        }catch(Exception ignored){return "{\"ok\":false}";}
+    }
+
+    private String listAudioFolderInternal(String folderUriText){
+        Uri tree=getSavedAudioTree();
+        if(tree==null)return jsonError("Bitte zuerst den Musikordner auswählen.");
+        try{
+            Uri root=treeRootDocument(tree);
+            if(root==null)return jsonError("Musikordner konnte nicht geöffnet werden.");
+            if(allowedAudioFolderUris.isEmpty())allowedAudioFolderUris.add(root.toString());
+
+            Uri folder=(folderUriText==null||folderUriText.trim().isEmpty())?root:Uri.parse(folderUriText);
+            if(!allowedAudioFolderUris.contains(folder.toString()))return jsonError("Dieser Ordner gehört nicht zur freigegebenen Musikbibliothek.");
+
+            String folderId=documentIdFor(folder);
+            if(folderId.isEmpty())return jsonError("Ordner-ID konnte nicht gelesen werden.");
+            Uri children=DocumentsContract.buildChildDocumentsUriUsingTree(tree,folderId);
+
+            java.util.ArrayList<org.json.JSONObject> dirs=new java.util.ArrayList<>();
+            java.util.ArrayList<org.json.JSONObject> files=new java.util.ArrayList<>();
+            String[] projection=new String[]{
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_SIZE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED
+            };
+
+            try(android.database.Cursor c=getContentResolver().query(children,projection,null,null,null)){
+                if(c!=null)while(c.moveToNext()){
+                    String docId=c.getString(0);
+                    String name=c.getString(1);
+                    String mime=c.getString(2);
+                    long size=c.isNull(3)?0L:c.getLong(3);
+                    long modified=c.isNull(4)?0L:c.getLong(4);
+                    if(docId==null||docId.isEmpty())continue;
+                    Uri child=DocumentsContract.buildDocumentUriUsingTree(tree,docId);
+                    boolean isDir=DocumentsContract.Document.MIME_TYPE_DIR.equals(mime);
+                    if(!isDir&&!isAudioFile(name,mime))continue;
+
+                    org.json.JSONObject item=new org.json.JSONObject();
+                    item.put("name",name==null?"":name);
+                    item.put("uri",child.toString());
+                    item.put("isDir",isDir);
+                    item.put("mime",mime==null?"":mime);
+                    item.put("size",size);
+                    item.put("modified",modified);
+                    if(isDir){
+                        allowedAudioFolderUris.add(child.toString());
+                        dirs.add(item);
+                    }else{
+                        allowedAudioFileUris.add(child.toString());
+                        files.add(item);
+                    }
+                }
+            }
+
+            java.util.Comparator<org.json.JSONObject> cmp=(a,b)->a.optString("name","").compareToIgnoreCase(b.optString("name",""));
+            java.util.Collections.sort(dirs,cmp); java.util.Collections.sort(files,cmp);
+            org.json.JSONArray arr=new org.json.JSONArray();
+            for(org.json.JSONObject x:dirs)arr.put(x);
+            for(org.json.JSONObject x:files)arr.put(x);
+
+            org.json.JSONObject out=new org.json.JSONObject();
+            out.put("ok",true);
+            out.put("folderUri",folder.toString());
+            out.put("rootUri",root.toString());
+            out.put("folderName",nasFolderDisplayName(folder));
+            out.put("items",arr);
+            return out.toString();
+        }catch(Exception e){
+            return jsonError("Musikordner konnte nicht gelesen werden: "+e.getMessage());
+        }
+    }
+
+    private void stopNasAudioPlayer(){
+        try{
+            if(nasAudioPlayer!=null){
+                try{nasAudioPlayer.stop();}catch(Exception ignored){}
+                try{nasAudioPlayer.release();}catch(Exception ignored){}
+            }
+        }finally{nasAudioPlayer=null;}
+    }
+
+    private boolean playNasAudioInternal(String uriText){
+        if(uriText==null||!allowedAudioFileUris.contains(uriText))return false;
+        runOnUiThread(()->{
+            try{
+                stopNasAudioPlayer();
+                android.media.MediaPlayer p=new android.media.MediaPlayer();
+                p.setDataSource(MainActivity.this,Uri.parse(uriText));
+                p.setOnPreparedListener(mp->mp.start());
+                p.setOnCompletionListener(mp->{
+                    stopNasAudioPlayer();
+                    if(web!=null)web.evaluateJavascript("window.dispatchEvent(new CustomEvent('tps-nas-audio-ended'));",null);
+                });
+                p.setOnErrorListener((mp,what,extra)->{
+                    stopNasAudioPlayer();
+                    if(web!=null)web.evaluateJavascript("window.dispatchEvent(new CustomEvent('tps-nas-audio-ended'));",null);
+                    return true;
+                });
+                nasAudioPlayer=p;
+                p.prepareAsync();
+            }catch(Exception e){
+                stopNasAudioPlayer();
+                Toast.makeText(MainActivity.this,"Audio konnte nicht abgespielt werden: "+e.getMessage(),Toast.LENGTH_LONG).show();
+            }
+        });
+        return true;
+    }
+
+    private synchronized String prepareNasAudioInternal(String uriText){
+        if(uriText==null||!allowedAudioFileUris.contains(uriText))return jsonError("Audiodatei ist nicht freigegeben.");
+        Uri uri=Uri.parse(uriText);
+        try(InputStream in=getContentResolver().openInputStream(uri);ByteArrayOutputStream out=new ByteArrayOutputStream()){
+            if(in==null)return jsonError("Audiodatei konnte nicht geöffnet werden.");
+            byte[] buf=new byte[16384];int n;
+            while((n=in.read(buf))>0){
+                out.write(buf,0,n);
+                if(out.size()>30*1024*1024)throw new IOException("Audiodatei ist größer als 30 MB");
+            }
+            byte[] bytes=out.toByteArray();
+            pendingNasAudioB64=Base64.encodeToString(bytes,Base64.NO_WRAP);
+            pendingNasAudioName=displayName(uri);
+            pendingNasAudioMime=getContentResolver().getType(uri);
+            if(pendingNasAudioMime==null||pendingNasAudioMime.isEmpty())pendingNasAudioMime="audio/mpeg";
+            org.json.JSONObject o=new org.json.JSONObject();
+            o.put("ok",true);
+            o.put("name",pendingNasAudioName);
+            o.put("mime",pendingNasAudioMime);
+            o.put("size",bytes.length);
+            o.put("chunks",(pendingNasAudioB64.length()+NAS_AUDIO_CHUNK_SIZE-1)/NAS_AUDIO_CHUNK_SIZE);
+            return o.toString();
+        }catch(Exception e){
+            pendingNasAudioB64=null;pendingNasAudioName=null;pendingNasAudioMime=null;
+            return jsonError("Audiodatei konnte nicht vorbereitet werden: "+e.getMessage());
+        }
+    }
+
     private void createNotificationChannel(){
         if(Build.VERSION.SDK_INT>=26){
             NotificationChannel ch=new NotificationChannel("tps_booking_updates","TPS Manager Hinweise",NotificationManager.IMPORTANCE_DEFAULT);
@@ -405,6 +589,57 @@ public class MainActivity extends Activity {
                 }
             });
         }
+
+        @JavascriptInterface public boolean hasAudioFolder(){
+            String u=getSharedPreferences("tps_native",MODE_PRIVATE).getString(PREF_AUDIO_FOLDER_URI,"");
+            return u!=null&&!u.isEmpty();
+        }
+        @JavascriptInterface public String getAudioFolderName(){
+            String n=getSharedPreferences("tps_native",MODE_PRIVATE).getString(PREF_AUDIO_FOLDER_NAME,"");
+            return n==null?"":n;
+        }
+        @JavascriptInterface public void chooseAudioFolder(){
+            runOnUiThread(()->{
+                try{
+                    Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                    i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION|Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+                    if(Build.VERSION.SDK_INT>=26){
+                        android.content.SharedPreferences p=getSharedPreferences("tps_native",MODE_PRIVATE);
+                        String saved=p.getString(PREF_AUDIO_FOLDER_URI,"");
+                        if(saved==null||saved.isEmpty())saved=p.getString("preferred_nas_folder_uri","");
+                        if(saved!=null&&!saved.isEmpty())i.putExtra(DocumentsContract.EXTRA_INITIAL_URI,Uri.parse(saved));
+                    }
+                    startActivityForResult(i,AUDIO_FOLDER_REQUEST);
+                }catch(Exception e){
+                    Toast.makeText(MainActivity.this,"Musikordner konnte nicht ausgewählt werden.",Toast.LENGTH_LONG).show();
+                }
+            });
+        }
+        @JavascriptInterface public String listAudioFolder(String folderUri){
+            return listAudioFolderInternal(folderUri);
+        }
+        @JavascriptInterface public boolean playNasAudio(String uri){
+            return playNasAudioInternal(uri);
+        }
+        @JavascriptInterface public void stopNasAudio(){ runOnUiThread(()->stopNasAudioPlayer()); }
+        @JavascriptInterface public synchronized String prepareNasAudio(String uri){ return prepareNasAudioInternal(uri); }
+        @JavascriptInterface public synchronized int getPreparedNasAudioChunkCount(){
+            if(pendingNasAudioB64==null||pendingNasAudioB64.isEmpty())return 0;
+            return (pendingNasAudioB64.length()+NAS_AUDIO_CHUNK_SIZE-1)/NAS_AUDIO_CHUNK_SIZE;
+        }
+        @JavascriptInterface public synchronized String getPreparedNasAudioChunk(int index){
+            if(pendingNasAudioB64==null||index<0)return "";
+            int start=index*NAS_AUDIO_CHUNK_SIZE;
+            if(start>=pendingNasAudioB64.length())return "";
+            int end=Math.min(start+NAS_AUDIO_CHUNK_SIZE,pendingNasAudioB64.length());
+            return pendingNasAudioB64.substring(start,end);
+        }
+        @JavascriptInterface public synchronized String getPreparedNasAudioName(){ return pendingNasAudioName==null?"":pendingNasAudioName; }
+        @JavascriptInterface public synchronized String getPreparedNasAudioMime(){ return pendingNasAudioMime==null?"audio/mpeg":pendingNasAudioMime; }
+        @JavascriptInterface public synchronized void clearPreparedNasAudio(){
+            pendingNasAudioB64=null;pendingNasAudioName=null;pendingNasAudioMime=null;
+        }
+
         @JavascriptInterface public void saveBase64File(String fileName,String mimeType,String base64Data){
             runOnUiThread(() -> {
                 try{
@@ -548,6 +783,31 @@ public class MainActivity extends Activity {
             }
             return;
         }
+
+        if(requestCode==AUDIO_FOLDER_REQUEST){
+            if(resultCode==RESULT_OK&&data!=null&&data.getData()!=null){
+                Uri tree=data.getData();
+                try{
+                    int flags=data.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                    getContentResolver().takePersistableUriPermission(tree,flags);
+                }catch(Exception ignored){}
+                String name=nasFolderDisplayName(tree);
+                getSharedPreferences("tps_native",MODE_PRIVATE).edit()
+                    .putString(PREF_AUDIO_FOLDER_URI,tree.toString())
+                    .putString(PREF_AUDIO_FOLDER_NAME,name)
+                    .apply();
+                allowedAudioFolderUris.clear();
+                allowedAudioFileUris.clear();
+                Uri root=treeRootDocument(tree);
+                if(root!=null)allowedAudioFolderUris.add(root.toString());
+                Toast.makeText(this,"Musikordner gespeichert: "+name,Toast.LENGTH_SHORT).show();
+                if(web!=null){
+                    String safe=name.replace("\\","\\\\").replace("'","\\'");
+                    web.evaluateJavascript("window.dispatchEvent(new CustomEvent('tps-audio-folder-changed',{detail:{name:'"+safe+"'}}));",null);
+                }
+            }
+            return;
+        }
         if(requestCode==SAVE_DOCUMENT_REQUEST){
             boolean ok=false;
             if(resultCode==RESULT_OK && data!=null && data.getData()!=null && pendingSaveBytes!=null){
@@ -609,6 +869,11 @@ public class MainActivity extends Activity {
             fileChooserIsDocx=false;
             fileChooserIsMultiple=false;
         }
+    }
+
+    @Override protected void onDestroy(){
+        stopNasAudioPlayer();
+        super.onDestroy();
     }
 
     private void nativeBackFallback(){
