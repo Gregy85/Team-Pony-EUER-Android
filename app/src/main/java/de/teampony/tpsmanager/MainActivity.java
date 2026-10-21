@@ -34,6 +34,7 @@ public class MainActivity extends Activity {
     private Uri pendingPdf;
     private ValueCallback<Uri[]> fileChooserCallback;
     private boolean fileChooserIsDocx=false;
+    private boolean fileChooserIsMultiple=false;
     private static final int FILE_CHOOSER_REQUEST = 1201;
     private static final int SAVE_DOCUMENT_REQUEST = 1202;
     private static final int NAS_FOLDER_REQUEST = 1203;
@@ -79,6 +80,7 @@ public class MainActivity extends Activity {
                 if(fileChooserCallback!=null) fileChooserCallback.onReceiveValue(null);
                 fileChooserCallback=callback;
                 fileChooserIsDocx=isDocxChooser(params);
+                fileChooserIsMultiple=params!=null && params.getMode()==WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE;
                 Intent intent;
                 if(fileChooserIsDocx){
                     intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -86,6 +88,29 @@ public class MainActivity extends Activity {
                     intent.setType("*/*");
                     intent.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"application/msword","application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
                     applyLastNasLocation(intent);
+                }else if(fileChooserIsMultiple){
+                    // Android-WebView liefert Mehrfachauswahl nicht auf allen Geräten zuverlässig
+                    // über FileChooserParams.createIntent(). Deshalb öffnen wir für HTML-input[multiple]
+                    // bewusst den nativen Android-Dokumentpicker und sammeln ClipData selbst ein.
+                    intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    java.util.ArrayList<String> mimeTypes=new java.util.ArrayList<>();
+                    try{
+                        String[] accept=params==null?null:params.getAcceptTypes();
+                        if(accept!=null)for(String raw:accept){
+                            if(raw==null)continue;
+                            for(String part:raw.split(",")){
+                                String t=part.trim();
+                                if(t.contains("/") && !mimeTypes.contains(t))mimeTypes.add(t);
+                            }
+                        }
+                    }catch(Exception ignored){}
+                    if(mimeTypes.size()==1) intent.setType(mimeTypes.get(0));
+                    else{
+                        intent.setType("*/*");
+                        if(!mimeTypes.isEmpty()) intent.putExtra(Intent.EXTRA_MIME_TYPES,mimeTypes.toArray(new String[mimeTypes.size()]));
+                    }
+                    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);
                 }else{
                     try { intent=params.createIntent(); }
                     catch(Exception e){
@@ -97,7 +122,7 @@ public class MainActivity extends Activity {
                 }
                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
                 try { startActivityForResult(intent,FILE_CHOOSER_REQUEST); return true; }
-                catch(Exception e){ fileChooserCallback=null; fileChooserIsDocx=false; Toast.makeText(MainActivity.this,"Dateiauswahl konnte nicht geöffnet werden.",Toast.LENGTH_LONG).show(); return false; }
+                catch(Exception e){ fileChooserCallback=null; fileChooserIsDocx=false; fileChooserIsMultiple=false; Toast.makeText(MainActivity.this,"Dateiauswahl konnte nicht geöffnet werden.",Toast.LENGTH_LONG).show(); return false; }
             }
         });
         web.setWebViewClient(new WebViewClient(){ @Override public void onPageFinished(WebView v,String u){
@@ -485,7 +510,21 @@ public class MainActivity extends Activity {
         if(requestCode==FILE_CHOOSER_REQUEST && fileChooserCallback!=null){
             Uri[] result=null;
             if(resultCode==RESULT_OK){
-                result=WebChromeClient.FileChooserParams.parseResult(resultCode,data);
+                if(fileChooserIsMultiple && data!=null){
+                    java.util.LinkedHashSet<Uri> picked=new java.util.LinkedHashSet<>();
+                    try{
+                        ClipData clip=data.getClipData();
+                        if(clip!=null){
+                            for(int i=0;i<clip.getItemCount();i++){
+                                Uri u=clip.getItemAt(i).getUri();
+                                if(u!=null)picked.add(u);
+                            }
+                        }
+                    }catch(Exception ignored){}
+                    if(data.getData()!=null)picked.add(data.getData());
+                    if(!picked.isEmpty())result=picked.toArray(new Uri[picked.size()]);
+                }
+                if(result==null) result=WebChromeClient.FileChooserParams.parseResult(resultCode,data);
                 if(result==null && data!=null && data.getData()!=null) result=new Uri[]{data.getData()};
                 if(fileChooserIsDocx){
                     Uri selected=(data!=null&&data.getData()!=null)?data.getData():(result!=null&&result.length>0?result[0]:null);
@@ -496,12 +535,14 @@ public class MainActivity extends Activity {
                     fileChooserCallback.onReceiveValue(null);
                     fileChooserCallback=null;
                     fileChooserIsDocx=false;
+                    fileChooserIsMultiple=false;
                     return;
                 }
             }
             fileChooserCallback.onReceiveValue(result);
             fileChooserCallback=null;
             fileChooserIsDocx=false;
+            fileChooserIsMultiple=false;
         }
     }
 
