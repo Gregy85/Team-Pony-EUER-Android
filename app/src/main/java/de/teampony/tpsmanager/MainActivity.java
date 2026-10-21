@@ -11,10 +11,6 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
 import android.graphics.Color;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
-import android.graphics.ImageDecoder;
-import androidx.core.content.FileProvider;
 import android.provider.OpenableColumns;
 import android.provider.DocumentsContract;
 import android.util.Base64;
@@ -220,88 +216,6 @@ public class MainActivity extends Activity {
         }catch(Exception e){
             Toast.makeText(MainActivity.this,"Mehrfachauswahl konnte nicht geöffnet werden.",Toast.LENGTH_LONG).show();
             return false;
-        }
-    }
-
-
-    private boolean uriLooksLikeHeic(Uri uri){
-        if(uri==null)return false;
-        String name=displayName(uri).toLowerCase();
-        String mime="";
-        try{ mime=String.valueOf(getContentResolver().getType(uri)).toLowerCase(); }catch(Exception ignored){}
-        return name.endsWith(".heic")||name.endsWith(".heif")||
-               mime.contains("image/heic")||mime.contains("image/heif");
-    }
-
-    private boolean uriContentIsJpeg(Uri uri){
-        if(uri==null)return false;
-        try(InputStream in=getContentResolver().openInputStream(uri)){
-            if(in==null)return false;
-            int a=in.read(),b=in.read(),c=in.read();
-            return a==0xFF&&b==0xD8&&c==0xFF;
-        }catch(Exception ignored){return false;}
-    }
-
-    private String safePickerName(String name){
-        String n=(name==null||name.trim().isEmpty())?"Foto":name.trim();
-        n=n.replaceAll("[\\\\/:*?\"<>|]+","_");
-        n=n.replaceAll("(?i)\\.(heic|heif)$","");
-        if(n.trim().isEmpty())n="Foto";
-        return n+".jpg";
-    }
-
-    private Uri copyUriAsJpegNamed(Uri source) throws IOException{
-        File dir=new File(getCacheDir(),"picker_images");
-        if(!dir.exists()&&!dir.mkdirs())throw new IOException("Temporärer Bildordner konnte nicht erstellt werden");
-        File out=new File(dir,System.currentTimeMillis()+"_"+safePickerName(displayName(source)));
-        try(InputStream in=getContentResolver().openInputStream(source);OutputStream os=new FileOutputStream(out)){
-            if(in==null)throw new IOException("Bild konnte nicht gelesen werden");
-            byte[] buf=new byte[16384];int n;
-            while((n=in.read(buf))>0)os.write(buf,0,n);
-            os.flush();
-        }
-        return FileProvider.getUriForFile(this,getPackageName()+".fileprovider",out);
-    }
-
-    private Uri transcodeHeicToJpeg(Uri source) throws IOException{
-        Bitmap bmp=null;
-        try{
-            if(Build.VERSION.SDK_INT>=28){
-                ImageDecoder.Source src=ImageDecoder.createSource(getContentResolver(),source);
-                bmp=ImageDecoder.decodeBitmap(src,(decoder,info,s)->decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE));
-            }else{
-                try(InputStream in=getContentResolver().openInputStream(source)){
-                    if(in!=null)bmp=BitmapFactory.decodeStream(in);
-                }
-            }
-            if(bmp==null)throw new IOException("HEIC/HEIF konnte nicht dekodiert werden");
-            File dir=new File(getCacheDir(),"picker_images");
-            if(!dir.exists()&&!dir.mkdirs())throw new IOException("Temporärer Bildordner konnte nicht erstellt werden");
-            File out=new File(dir,System.currentTimeMillis()+"_"+safePickerName(displayName(source)));
-            try(OutputStream os=new FileOutputStream(out)){
-                if(!bmp.compress(Bitmap.CompressFormat.JPEG,95,os))throw new IOException("JPG konnte nicht erstellt werden");
-                os.flush();
-            }
-            return FileProvider.getUriForFile(this,getPackageName()+".fileprovider",out);
-        }catch(Exception e){
-            if(e instanceof IOException)throw (IOException)e;
-            throw new IOException(e.getMessage()==null?"HEIC/HEIF konnte nicht in JPG umgewandelt werden":e.getMessage(),e);
-        }finally{
-            if(bmp!=null&&!bmp.isRecycled())bmp.recycle();
-        }
-    }
-
-    private Uri normalizePickedImageUri(Uri uri){
-        if(uri==null||!uriLooksLikeHeic(uri))return uri;
-        try{
-            // Wenn Android nur den Namen/MIME falsch als HEIC meldet, bleiben die
-            // echten JPEG-Daten 1:1 erhalten; nur der ausgegebene Dateiname wird .jpg.
-            if(uriContentIsJpeg(uri))return copyUriAsJpegNamed(uri);
-            // Nur echter HEIC/HEIF-Inhalt wird für WebView/TPS in JPEG umgewandelt.
-            return transcodeHeicToJpeg(uri);
-        }catch(Exception e){
-            Toast.makeText(this,"Bildformat konnte nicht vorbereitet werden: "+e.getMessage(),Toast.LENGTH_LONG).show();
-            return uri;
         }
     }
 
@@ -924,21 +838,18 @@ public class MainActivity extends Activity {
                         if(clip!=null){
                             for(int i=0;i<clip.getItemCount();i++){
                                 Uri u=clip.getItemAt(i).getUri();
-                                if(u!=null)picked.add(normalizePickedImageUri(u));
+                                if(u!=null)picked.add(u);
                             }
                         }
                     }catch(Exception ignored){}
-                    if(data.getData()!=null)picked.add(normalizePickedImageUri(data.getData()));
+                    if(data.getData()!=null)picked.add(data.getData());
                     if(!picked.isEmpty()){
                         result=picked.toArray(new Uri[picked.size()]);
                         rememberLastMediaLocation(result[0],data.getFlags());
                     }
                 }
                 if(result==null) result=WebChromeClient.FileChooserParams.parseResult(resultCode,data);
-                if(result==null && data!=null && data.getData()!=null) result=new Uri[]{normalizePickedImageUri(data.getData())};
-                if(result!=null && !fileChooserIsDocx){
-                    for(int i=0;i<result.length;i++)result[i]=normalizePickedImageUri(result[i]);
-                }
+                if(result==null && data!=null && data.getData()!=null) result=new Uri[]{data.getData()};
                 if(fileChooserIsMultiple && result!=null && result.length>0 && data!=null) rememberLastMediaLocation(result[0],data.getFlags());
                 if(fileChooserIsDocx){
                     Uri selected=(data!=null&&data.getData()!=null)?data.getData():(result!=null&&result.length>0?result[0]:null);
