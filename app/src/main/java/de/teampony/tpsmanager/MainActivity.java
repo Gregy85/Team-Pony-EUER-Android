@@ -15,6 +15,9 @@ import android.provider.OpenableColumns;
 import android.provider.DocumentsContract;
 import android.util.Base64;
 import android.webkit.*;
+import androidx.core.content.FileProvider;
+import java.util.Calendar;
+import java.util.Locale;
 import com.google.firebase.messaging.FirebaseMessaging;
 import androidx.work.ExistingPeriodicWorkPolicy;
 import androidx.work.PeriodicWorkRequest;
@@ -41,8 +44,11 @@ public class MainActivity extends Activity {
     private static final int SAVE_DOCUMENT_REQUEST = 1202;
     private static final int NAS_FOLDER_REQUEST = 1203;
     private static final int AUDIO_FOLDER_REQUEST = 1204;
+    private static final int VIDEO_ARCHIVE_FOLDER_REQUEST = 1205;
     private static final String PREF_AUDIO_FOLDER_URI = "preferred_audio_folder_uri";
     private static final String PREF_AUDIO_FOLDER_NAME = "preferred_audio_folder_name";
+    private static final String PREF_VIDEO_ARCHIVE_URI = "preferred_video_archive_uri";
+    private static final String PREF_VIDEO_ARCHIVE_NAME = "preferred_video_archive_name";
     private byte[] pendingSaveBytes;
     private String pendingSaveName;
     private String pendingDocxXmlB64;
@@ -58,6 +64,19 @@ public class MainActivity extends Activity {
     private android.media.MediaPlayer nasAudioPlayer;
     private final java.util.HashSet<String> allowedAudioFolderUris=new java.util.HashSet<>();
     private final java.util.HashSet<String> allowedAudioFileUris=new java.util.HashSet<>();
+    private File pendingSharedFile;
+    private OutputStream pendingSharedOut;
+    private String pendingSharedMime="application/zip";
+    private String pendingSharedText="";
+    private Uri pendingReturnUri;
+    private String pendingReturnMime="";
+    private boolean returnFolderPickerOpen=false;
+    private File lastReturnedVideoCache;
+    private String lastReturnedVideoName="";
+    private String lastReturnedVideoMime="video/mp4";
+    private String lastReturnedProjectId="";
+    private String lastReturnedArchivePath="";
+    private static final int RETURN_VIDEO_CHUNK_SIZE=262144;
     private float swipeDownX, swipeDownY;
 
     @Override public void onCreate(Bundle b) {
@@ -122,6 +141,7 @@ public class MainActivity extends Activity {
         });
         web.setWebViewClient(new WebViewClient(){ @Override public void onPageFinished(WebView v,String u){
             deliverPdf();
+            maybeHandlePendingReturn();
             // Android 15+ keeps the WebView itself inside the system bars. Also expose
             // native inset values to the web app for fixed headers/scanner overlays.
             if (android.os.Build.VERSION.SDK_INT >= 23) {
@@ -459,6 +479,217 @@ public class MainActivity extends Activity {
         }
     }
 
+
+    private Uri savedVideoArchiveTree(){
+        try{
+            String u=getSharedPreferences("tps_native",MODE_PRIVATE).getString(PREF_VIDEO_ARCHIVE_URI,"");
+            return (u==null||u.isEmpty())?null:Uri.parse(u);
+        }catch(Exception ignored){return null;}
+    }
+
+    private String safeFileName(String name,String fallback){
+        String n=(name==null||name.trim().isEmpty())?fallback:name.trim();
+        n=n.replaceAll("[\\\\/:*?\"<>|]+","_").replaceAll("\\s+"," ").trim();
+        if(n.length()>120)n=n.substring(0,120);
+        return n.isEmpty()?fallback:n;
+    }
+
+    private Uri documentTreeRoot(Uri tree){
+        if(tree==null)return null;
+        try{return DocumentsContract.buildDocumentUriUsingTree(tree,DocumentsContract.getTreeDocumentId(tree));}
+        catch(Exception e){return tree;}
+    }
+
+    private Uri findChild(Uri tree,Uri parent,String name,String mime){
+        if(tree==null||parent==null||name==null)return null;
+        String parentId;
+        try{parentId=DocumentsContract.getDocumentId(parent);}catch(Exception e){return null;}
+        Uri children=DocumentsContract.buildChildDocumentsUriUsingTree(tree,parentId);
+        String[] projection={DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME,DocumentsContract.Document.COLUMN_MIME_TYPE};
+        try(android.database.Cursor c=getContentResolver().query(children,projection,null,null,null)){
+            if(c!=null)while(c.moveToNext()){
+                String id=c.getString(0),n=c.getString(1),m=c.getString(2);
+                if(name.equals(n)&&(mime==null||mime.equals(m)))return DocumentsContract.buildDocumentUriUsingTree(tree,id);
+            }
+        }catch(Exception ignored){}
+        return null;
+    }
+
+    private Uri ensureDirectory(Uri tree,Uri parent,String name) throws IOException{
+        Uri found=findChild(tree,parent,name,DocumentsContract.Document.MIME_TYPE_DIR);
+        if(found!=null)return found;
+        Uri created=DocumentsContract.createDocument(getContentResolver(),parent,DocumentsContract.Document.MIME_TYPE_DIR,name);
+        if(created==null)throw new IOException("Ordner konnte nicht angelegt werden: "+name);
+        return created;
+    }
+
+    private Uri createOrReplaceFile(Uri tree,Uri parent,String name,String mime) throws IOException{
+        Uri found=findChild(tree,parent,name,null);
+        if(found!=null){
+            try{DocumentsContract.deleteDocument(getContentResolver(),found);}catch(Exception ignored){}
+        }
+        Uri created=DocumentsContract.createDocument(getContentResolver(),parent,(mime==null||mime.isEmpty())?"video/mp4":mime,name);
+        if(created==null)throw new IOException("Videodatei konnte nicht angelegt werden");
+        return created;
+    }
+
+    private String[] germanMonthNames(){
+        return new String[]{"Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"};
+    }
+
+    private void emitReturnEvent(boolean ok,String error){
+        if(web==null)return;
+        try{
+            org.json.JSONObject d=new org.json.JSONObject();
+            d.put("ok",ok);
+            d.put("name",lastReturnedVideoName);
+            d.put("projectId",lastReturnedProjectId);
+            d.put("archivePath",lastReturnedArchivePath);
+            if(error!=null&&!error.isEmpty())d.put("error",error);
+            final String js="window.dispatchEvent(new CustomEvent('tps-return-video-ready',{detail:"+d.toString()+"}));";
+            runOnUiThread(()->web.evaluateJavascript(js,null));
+        }catch(Exception ignored){}
+    }
+
+    private void copyStream(InputStream in,OutputStream out,long maxBytes) throws IOException{
+        byte[] buf=new byte[16384];int n;long total=0;
+        while((n=in.read(buf))>0){out.write(buf,0,n);total+=n;if(maxBytes>0&&total>maxBytes)throw new IOException("Datei ist zu groß");}
+        out.flush();
+    }
+
+    private void maybeHandlePendingReturn(){
+        if(pendingReturnUri==null)return;
+        Uri tree=savedVideoArchiveTree();
+        if(tree==null){
+            if(returnFolderPickerOpen)return;
+            returnFolderPickerOpen=true;
+            runOnUiThread(()->{
+                Toast.makeText(this,"Bitte einmal den NAS-Ordner „TPS Videos“ auswählen.",Toast.LENGTH_LONG).show();
+                try{
+                    Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                    i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION|Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+                    String saved=getSharedPreferences("tps_native",MODE_PRIVATE).getString("preferred_nas_folder_uri","");
+                    if(Build.VERSION.SDK_INT>=26&&saved!=null&&!saved.isEmpty())i.putExtra(DocumentsContract.EXTRA_INITIAL_URI,Uri.parse(saved));
+                    startActivityForResult(i,VIDEO_ARCHIVE_FOLDER_REQUEST);
+                }catch(Exception e){returnFolderPickerOpen=false;Toast.makeText(this,"Video-Archivordner konnte nicht geöffnet werden.",Toast.LENGTH_LONG).show();}
+            });
+            return;
+        }
+        final Uri source=pendingReturnUri;final String mime=pendingReturnMime;pendingReturnUri=null;pendingReturnMime="";
+        new Thread(()->processReturnedMedia(source,mime)).start();
+    }
+
+    private void processReturnedMedia(Uri source,String incomingMime){
+        File tempVideo=null;
+        String returnJson="";
+        try{
+            String incomingName=displayName(source);
+            String lower=incomingName.toLowerCase(Locale.ROOT);
+            boolean zip=lower.endsWith(".zip")||String.valueOf(incomingMime).toLowerCase(Locale.ROOT).contains("zip");
+            File dir=new File(getCacheDir(),"returned_video");if(!dir.exists())dir.mkdirs();
+            if(lastReturnedVideoCache!=null&&lastReturnedVideoCache.exists())try{lastReturnedVideoCache.delete();}catch(Exception ignored){}
+            if(zip){
+                try(InputStream raw=getContentResolver().openInputStream(source);ZipInputStream zin=new ZipInputStream(new BufferedInputStream(raw))){
+                    ZipEntry e;int videos=0;
+                    while((e=zin.getNextEntry())!=null){
+                        if(e.isDirectory())continue;
+                        String base=new File(e.getName()).getName();
+                        String l=base.toLowerCase(Locale.ROOT);
+                        if("return.json".equals(l)){
+                            ByteArrayOutputStream txt=new ByteArrayOutputStream();copyStream(zin,txt,1024*1024);returnJson=txt.toString("UTF-8");
+                        }else if(videos==0&&(l.endsWith(".mp4")||l.endsWith(".mov")||l.endsWith(".webm")||l.endsWith(".m4v"))){
+                            tempVideo=new File(dir,"return_"+System.currentTimeMillis()+"_"+safeFileName(base,"TPS_VIDEO.mp4"));
+                            try(OutputStream out=new FileOutputStream(tempVideo)){copyStream(zin,out,800L*1024L*1024L);}
+                            videos++;
+                        }
+                    }
+                }
+            }else{
+                String base=safeFileName(incomingName,"TPS_VIDEO.mp4");
+                tempVideo=new File(dir,"return_"+System.currentTimeMillis()+"_"+base);
+                try(InputStream in=getContentResolver().openInputStream(source);OutputStream out=new FileOutputStream(tempVideo)){if(in==null)throw new IOException("Video konnte nicht geöffnet werden");copyStream(in,out,800L*1024L*1024L);}
+            }
+            if(tempVideo==null||!tempVideo.exists()||tempVideo.length()==0)throw new IOException("In der Rückgabe wurde kein Video gefunden.");
+
+            org.json.JSONObject meta=null;try{if(returnJson!=null&&!returnJson.trim().isEmpty())meta=new org.json.JSONObject(returnJson);}catch(Exception ignored){}
+            Calendar cal=Calendar.getInstance();
+            int year=meta==null?cal.get(Calendar.YEAR):meta.optInt("archive_year",cal.get(Calendar.YEAR));
+            int month=meta==null?cal.get(Calendar.MONTH)+1:meta.optInt("archive_month",cal.get(Calendar.MONTH)+1);
+            if(year<2020||year>2100)year=cal.get(Calendar.YEAR);if(month<1||month>12)month=cal.get(Calendar.MONTH)+1;
+            String projectId=meta==null?"":meta.optString("project_id","");
+            String wanted=meta==null?tempVideo.getName():meta.optString("video_file",tempVideo.getName());
+            wanted=safeFileName(wanted,"TPS_VIDEO.mp4");
+            if(!wanted.toLowerCase(Locale.ROOT).matches(".*\\.(mp4|mov|webm|m4v)$"))wanted+=".mp4";
+            String mime=(wanted.toLowerCase(Locale.ROOT).endsWith(".mov"))?"video/quicktime":(wanted.toLowerCase(Locale.ROOT).endsWith(".webm")?"video/webm":"video/mp4");
+
+            Uri tree=savedVideoArchiveTree();if(tree==null)throw new IOException("Video-Archivordner ist nicht gesetzt.");
+            Uri root=documentTreeRoot(tree);if(root==null)throw new IOException("Video-Archiv konnte nicht geöffnet werden.");
+            Uri yearDir=ensureDirectory(tree,root,String.valueOf(year));
+            String monthFolder=String.format(Locale.GERMANY,"%02d %s",month,germanMonthNames()[month-1]);
+            Uri monthDir=ensureDirectory(tree,yearDir,monthFolder);
+            Uri dest=createOrReplaceFile(tree,monthDir,wanted,mime);
+            try(InputStream in=new FileInputStream(tempVideo);OutputStream out=getContentResolver().openOutputStream(dest,"w")){if(out==null)throw new IOException("NAS-Ziel konnte nicht geöffnet werden");copyStream(in,out,0);}
+
+            lastReturnedVideoCache=tempVideo;
+            lastReturnedVideoName=wanted;
+            lastReturnedVideoMime=mime;
+            lastReturnedProjectId=projectId;
+            lastReturnedArchivePath=year+"/"+monthFolder+"/"+wanted;
+            emitReturnEvent(true,"");
+            runOnUiThread(()->Toast.makeText(this,"Video gespeichert: "+lastReturnedArchivePath,Toast.LENGTH_LONG).show());
+        }catch(Exception e){
+            if(tempVideo!=null&&tempVideo.exists()&&tempVideo.length()==0)try{tempVideo.delete();}catch(Exception ignored){}
+            emitReturnEvent(false,e.getMessage());
+            final String msg=e.getMessage();runOnUiThread(()->Toast.makeText(this,"Video-Rückgabe fehlgeschlagen: "+msg,Toast.LENGTH_LONG).show());
+        }
+    }
+
+    private boolean beginSharedFileInternal(String fileName,String mime,String text){
+        synchronized(this){
+            try{
+                if(pendingSharedOut!=null)try{pendingSharedOut.close();}catch(Exception ignored){}
+                File dir=new File(getCacheDir(),"shared_projects");if(!dir.exists()&&!dir.mkdirs())return false;
+                pendingSharedFile=new File(dir,System.currentTimeMillis()+"_"+safeFileName(fileName,"TPS_ChatGPT.zip"));
+                pendingSharedOut=new BufferedOutputStream(new FileOutputStream(pendingSharedFile));
+                pendingSharedMime=(mime==null||mime.isEmpty())?"application/zip":mime;
+                pendingSharedText=text==null?"":text;
+                return true;
+            }catch(Exception e){pendingSharedFile=null;pendingSharedOut=null;return false;}
+        }
+    }
+
+    private boolean appendSharedFileChunkInternal(String b64){
+        synchronized(this){
+            if(pendingSharedOut==null)return false;
+            try{byte[] data=Base64.decode(b64,Base64.DEFAULT);pendingSharedOut.write(data);return true;}
+            catch(Exception e){return false;}
+        }
+    }
+
+    private boolean finishSharedFileToChatGPTInternal(){
+        final File f;final String mime;final String text;
+        synchronized(this){
+            try{if(pendingSharedOut!=null){pendingSharedOut.flush();pendingSharedOut.close();}}catch(Exception e){return false;}
+            pendingSharedOut=null;f=pendingSharedFile;mime=pendingSharedMime;text=pendingSharedText;pendingSharedFile=null;
+        }
+        if(f==null||!f.exists()||f.length()==0)return false;
+        runOnUiThread(()->{
+            Uri uri=FileProvider.getUriForFile(this,getPackageName()+".fileprovider",f);
+            Intent send=new Intent(Intent.ACTION_SEND);
+            send.setType(mime);
+            send.putExtra(Intent.EXTRA_STREAM,uri);
+            send.putExtra(Intent.EXTRA_TEXT,text);
+            send.setClipData(ClipData.newUri(getContentResolver(),"TPS ChatGPT Projekt",uri));
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            try{
+                Intent direct=new Intent(send);direct.setPackage("com.openai.chatgpt");startActivity(direct);
+            }catch(Exception e){
+                try{startActivity(Intent.createChooser(send,"Mit ChatGPT erstellen"));}catch(Exception ex){Toast.makeText(this,"Teilen konnte nicht geöffnet werden.",Toast.LENGTH_LONG).show();}
+            }
+        });
+        return true;
+    }
+
     private void createNotificationChannel(){
         if(Build.VERSION.SDK_INT>=26){
             NotificationChannel ch=new NotificationChannel("tps_booking_updates","TPS Manager Hinweise",NotificationManager.IMPORTANCE_DEFAULT);
@@ -640,6 +871,59 @@ public class MainActivity extends Activity {
             pendingNasAudioB64=null;pendingNasAudioName=null;pendingNasAudioMime=null;
         }
 
+
+        @JavascriptInterface public boolean beginSharedFile(String fileName,String mimeType,String shareText){ return beginSharedFileInternal(fileName,mimeType,shareText); }
+        @JavascriptInterface public boolean appendSharedFileChunk(String base64Chunk){ return appendSharedFileChunkInternal(base64Chunk); }
+        @JavascriptInterface public boolean finishSharedFileToChatGPT(){ return finishSharedFileToChatGPTInternal(); }
+        @JavascriptInterface public synchronized void cancelSharedFile(){
+            try{if(pendingSharedOut!=null)pendingSharedOut.close();}catch(Exception ignored){}
+            pendingSharedOut=null;if(pendingSharedFile!=null)try{pendingSharedFile.delete();}catch(Exception ignored){}pendingSharedFile=null;
+        }
+        @JavascriptInterface public boolean hasVideoArchiveFolder(){
+            String u=getSharedPreferences("tps_native",MODE_PRIVATE).getString(PREF_VIDEO_ARCHIVE_URI,"");return u!=null&&!u.isEmpty();
+        }
+        @JavascriptInterface public String getVideoArchiveFolderName(){
+            String n=getSharedPreferences("tps_native",MODE_PRIVATE).getString(PREF_VIDEO_ARCHIVE_NAME,"");return n==null?"":n;
+        }
+        @JavascriptInterface public void chooseVideoArchiveFolder(){
+            runOnUiThread(()->{
+                try{
+                    Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                    i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION|Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+                    String saved=getSharedPreferences("tps_native",MODE_PRIVATE).getString(PREF_VIDEO_ARCHIVE_URI,"");
+                    if((saved==null||saved.isEmpty()))saved=getSharedPreferences("tps_native",MODE_PRIVATE).getString("preferred_nas_folder_uri","");
+                    if(Build.VERSION.SDK_INT>=26&&saved!=null&&!saved.isEmpty())i.putExtra(DocumentsContract.EXTRA_INITIAL_URI,Uri.parse(saved));
+                    startActivityForResult(i,VIDEO_ARCHIVE_FOLDER_REQUEST);
+                }catch(Exception e){Toast.makeText(MainActivity.this,"Video-Archivordner konnte nicht geöffnet werden.",Toast.LENGTH_LONG).show();}
+            });
+        }
+        @JavascriptInterface public String getLastReturnedVideoInfo(){
+            try{
+                org.json.JSONObject o=new org.json.JSONObject();
+                boolean ok=lastReturnedVideoCache!=null&&lastReturnedVideoCache.exists()&&lastReturnedVideoCache.length()>0;
+                o.put("ok",ok);if(ok){o.put("name",lastReturnedVideoName);o.put("mime",lastReturnedVideoMime);o.put("size",lastReturnedVideoCache.length());o.put("chunks",(lastReturnedVideoCache.length()+RETURN_VIDEO_CHUNK_SIZE-1)/RETURN_VIDEO_CHUNK_SIZE);o.put("projectId",lastReturnedProjectId);o.put("archivePath",lastReturnedArchivePath);}return o.toString();
+            }catch(Exception e){return "{\"ok\":false}";}
+        }
+        @JavascriptInterface public int getLastReturnedVideoChunkCount(){
+            if(lastReturnedVideoCache==null||!lastReturnedVideoCache.exists())return 0;return (int)((lastReturnedVideoCache.length()+RETURN_VIDEO_CHUNK_SIZE-1)/RETURN_VIDEO_CHUNK_SIZE);
+        }
+        @JavascriptInterface public String getLastReturnedVideoChunk(int index){
+            if(lastReturnedVideoCache==null||!lastReturnedVideoCache.exists()||index<0)return "";
+            long start=(long)index*RETURN_VIDEO_CHUNK_SIZE;if(start>=lastReturnedVideoCache.length())return "";
+            int len=(int)Math.min((long)RETURN_VIDEO_CHUNK_SIZE,lastReturnedVideoCache.length()-start);
+            byte[] b=new byte[len];
+            try(RandomAccessFile raf=new RandomAccessFile(lastReturnedVideoCache,"r")){raf.seek(start);raf.readFully(b);return Base64.encodeToString(b,Base64.NO_WRAP);}catch(Exception e){return "";}
+        }
+        @JavascriptInterface public void shareLastReturnedVideo(){
+            final File f=lastReturnedVideoCache;if(f==null||!f.exists())return;
+            runOnUiThread(()->{
+                try{
+                    Uri u=FileProvider.getUriForFile(MainActivity.this,getPackageName()+".fileprovider",f);
+                    Intent s=new Intent(Intent.ACTION_SEND);s.setType(lastReturnedVideoMime);s.putExtra(Intent.EXTRA_STREAM,u);s.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);s.setClipData(ClipData.newUri(getContentResolver(),"TPS Video",u));startActivity(Intent.createChooser(s,"Video teilen"));
+                }catch(Exception e){Toast.makeText(MainActivity.this,"Video konnte nicht geteilt werden.",Toast.LENGTH_LONG).show();}
+            });
+        }
+
         @JavascriptInterface public void saveBase64File(String fileName,String mimeType,String base64Data){
             runOnUiThread(() -> {
                 try{
@@ -675,12 +959,20 @@ public class MainActivity extends Activity {
         }
     }
 
-    @Override protected void onNewIntent(Intent i){ super.onNewIntent(i); setIntent(i); acceptIntent(i); deliverPdf(); }
+    @Override protected void onNewIntent(Intent i){ super.onNewIntent(i); setIntent(i); acceptIntent(i); deliverPdf(); maybeHandlePendingReturn(); }
 
     private void acceptIntent(Intent i){
         if(i==null)return;
         if(Intent.ACTION_VIEW.equals(i.getAction()) && i.getData()!=null) pendingPdf=i.getData();
-        if(Intent.ACTION_SEND.equals(i.getAction())) pendingPdf=i.getParcelableExtra(Intent.EXTRA_STREAM);
+        if(Intent.ACTION_SEND.equals(i.getAction())){
+            Uri u=i.getParcelableExtra(Intent.EXTRA_STREAM);if(u==null)return;
+            String type=String.valueOf(i.getType()).toLowerCase(Locale.ROOT);
+            String name=displayName(u).toLowerCase(Locale.ROOT);
+            if(type.contains("pdf")||name.endsWith(".pdf"))pendingPdf=u;
+            else if(type.startsWith("video/")||type.contains("zip")||name.endsWith(".zip")||name.endsWith(".mp4")||name.endsWith(".mov")||name.endsWith(".webm")||name.endsWith(".m4v")){
+                pendingReturnUri=u;pendingReturnMime=i.getType()==null?"":i.getType();
+            }
+        }
     }
 
     private String displayName(Uri u){
@@ -808,6 +1100,23 @@ public class MainActivity extends Activity {
             }
             return;
         }
+
+        if(requestCode==VIDEO_ARCHIVE_FOLDER_REQUEST){
+            returnFolderPickerOpen=false;
+            if(resultCode==RESULT_OK&&data!=null&&data.getData()!=null){
+                Uri tree=data.getData();
+                try{
+                    int flags=data.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                    getContentResolver().takePersistableUriPermission(tree,flags);
+                }catch(Exception ignored){}
+                String name=nasFolderDisplayName(tree);
+                getSharedPreferences("tps_native",MODE_PRIVATE).edit().putString(PREF_VIDEO_ARCHIVE_URI,tree.toString()).putString(PREF_VIDEO_ARCHIVE_NAME,name).apply();
+                Toast.makeText(this,"Video-Archiv gespeichert: "+name,Toast.LENGTH_SHORT).show();
+                if(web!=null){String safe=name.replace("\\","\\\\").replace("'","\\'");web.evaluateJavascript("window.dispatchEvent(new CustomEvent('tps-video-archive-folder-changed',{detail:{name:'"+safe+"'}}));",null);}
+                maybeHandlePendingReturn();
+            }
+            return;
+        }
         if(requestCode==SAVE_DOCUMENT_REQUEST){
             boolean ok=false;
             if(resultCode==RESULT_OK && data!=null && data.getData()!=null && pendingSaveBytes!=null){
@@ -873,6 +1182,7 @@ public class MainActivity extends Activity {
 
     @Override protected void onDestroy(){
         stopNasAudioPlayer();
+        try{if(pendingSharedOut!=null)pendingSharedOut.close();}catch(Exception ignored){}
         super.onDestroy();
     }
 

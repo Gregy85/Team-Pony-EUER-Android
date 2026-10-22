@@ -1,1 +1,5 @@
-<paths xmlns:android="http://schemas.android.com/apk/res/android"><cache-path name="cache" path="."/></paths>
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="shared_projects" path="shared_projects/" />
+    <cache-path name="returned_video" path="returned_video/" />
+</paths>
